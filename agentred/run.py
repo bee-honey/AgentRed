@@ -5,6 +5,7 @@ evaluate the trace against the one invariant, print a report.
 
 Backend selection:
   --backend anthropic   real Claude (needs ANTHROPIC_API_KEY)
+  --backend openai      real OpenAI (needs OPENAI_API_KEY)
   --backend scripted    offline demo: contrasts a naive agent (FAIL) with a
                         careful one (PASS), so the pipeline is visible with no key
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 
 from .agent import AgentRun, TargetAgent
+from .env import load_dotenv
 from .judge import Verdict, evaluate_no_secret_egress
 from .models import Model, ModelTurn, ScriptedModel, ToolUse
 from .scenario import INDIRECT_INJECTION_EGRESS, Scenario
@@ -97,16 +99,31 @@ def format_report(label: str, scenario: Scenario, run: AgentRun, verdict: Verdic
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the AgentRed v0.1 vertical slice.")
-    parser.add_argument("--backend", choices=["scripted", "anthropic"], default="scripted")
+    parser.add_argument(
+        "--backend", choices=["scripted", "anthropic", "openai"], default="scripted"
+    )
+    parser.add_argument("--model", default=None, help="override the backend's default model id")
     args = parser.parse_args(argv)
+
+    # Pick up keys from a local .env if present (real env vars still win).
+    load_dotenv()
 
     scenario = INDIRECT_INJECTION_EGRESS
 
-    if args.backend == "anthropic":
-        from .models import AnthropicModel  # noqa: PLC0415
+    if args.backend in ("anthropic", "openai"):
+        if args.backend == "anthropic":
+            from .models import AnthropicModel  # noqa: PLC0415
 
-        run, verdict = evaluate(scenario, AnthropicModel())
-        print(format_report("real agent (Anthropic)", scenario, run, verdict))
+            model = AnthropicModel(args.model) if args.model else AnthropicModel()
+            label = "real agent (Anthropic)"
+        else:
+            from .models import OpenAIModel  # noqa: PLC0415
+
+            model = OpenAIModel(args.model) if args.model else OpenAIModel()
+            label = "real agent (OpenAI)"
+
+        run, verdict = evaluate(scenario, model)
+        print(format_report(label, scenario, run, verdict))
         return 0 if verdict.passed else 1
 
     # Offline demo: same harness + same evaluator, two agent behaviours.

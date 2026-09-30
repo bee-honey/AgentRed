@@ -8,6 +8,7 @@ dependencies = []  # v0.1 core is stdlib-only
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.40"]
 dev = ["pytest>=8"]
 
 [project.scripts]
