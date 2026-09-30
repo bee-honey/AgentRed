@@ -1,0 +1,24 @@
+[project]
+name = "agentred"
+version = "0.1.0"
+description = "A trace-grounded safety-evaluation harness for AI agents and MCP servers."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []  # v0.1 core is stdlib-only
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+agentred = "agentred.run:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentred"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
