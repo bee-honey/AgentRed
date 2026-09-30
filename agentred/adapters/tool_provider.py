@@ -1,11 +1,13 @@
 """Tool providers give the agent a uniform way to list and call tools.
 
+Both take the scenario's tool names and expose the same interface, so the agent
+is identical whether tools run in-process or across a real MCP boundary — only
+the source of the trace changes.
+
 - InProcessToolProvider: tools run in-process; the dispatcher records to the
-  trace directly. Fast, no subprocess — used for the offline demo and tests that
-  don't need a real boundary.
+  trace directly. Fast, no subprocess — used for the offline demo and unit tests.
 - MCPToolProvider: tools live in a separate MCP server process; a RecordingProxy
-  records every call at the JSON-RPC boundary. This is the Phase 1 upgrade — the
-  trace now comes from a real protocol boundary.
+  records every call at the JSON-RPC boundary.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from typing import Any, Protocol
 
 from ..mcp.client import MCPClient
 from ..proxy.recording_proxy import RecordingProxy
-from ..tools import SEND_EMAIL_TOOL, InstrumentedTools
+from ..tools import InstrumentedTools, model_schemas
 from ..trace import Trace
 
 
@@ -31,12 +33,13 @@ class ToolProvider(Protocol):
 
 
 class InProcessToolProvider:
-    def __init__(self) -> None:
+    def __init__(self, tool_names: tuple[str, ...]) -> None:
         self.trace = Trace()
-        self._tools = InstrumentedTools(self.trace)
+        self._names = tuple(tool_names)
+        self._tools = InstrumentedTools(self.trace, self._names)
 
     def tool_schemas(self) -> list[dict[str, Any]]:
-        return [SEND_EMAIL_TOOL]
+        return model_schemas(self._names)
 
     def dispatch(self, name: str, args: dict[str, Any]) -> str:
         return self._tools.dispatch(name, args)
@@ -57,7 +60,9 @@ def _to_model_schema(mcp_tool: dict[str, Any]) -> dict[str, Any]:
 class MCPToolProvider:
     """Runs tools over a real MCP boundary and records via the proxy.
 
-    Usable as a context manager so the server subprocess is always cleaned up.
+    `command` should launch the MCP server; the server decides which tools to
+    advertise (here, from its argv). Usable as a context manager so the server
+    subprocess is always cleaned up.
     """
 
     def __init__(self, command: list[str], cwd: str | None = None) -> None:
