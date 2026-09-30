@@ -20,8 +20,11 @@ Extras:
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
 from .agent import AgentRun, TargetAgent
 from .env import load_dotenv
 from .judge import Verdict, evaluate_no_secret_egress
@@ -29,6 +32,21 @@ from .models import Model, ModelTurn, ScriptedModel, ToolUse
 from .scenario import INDIRECT_INJECTION_EGRESS, Scenario
 
 DEFAULT_COMPARE = ("scripted:naive", "scripted:careful", "openai:gpt-4o", "openai:gpt-4o-mini")
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+EMAIL_SERVER_CMD = [sys.executable, str(_REPO_ROOT / "targets" / "mcp_servers" / "email_server.py")]
+
+
+def make_provider(transport: str) -> ToolProvider:
+    """Build a fresh ToolProvider for one run.
+
+    inprocess -> tools run in-process (fast; recording in the dispatcher).
+    mcp       -> tools run in a real MCP server subprocess; the RecordingProxy
+                 captures every call at the JSON-RPC boundary.
+    """
+    if transport == "mcp":
+        return MCPToolProvider(EMAIL_SERVER_CMD, cwd=str(_REPO_ROOT))
+    return InProcessToolProvider()
 
 
 def _naive_backend(scenario: Scenario) -> Model:
@@ -103,8 +121,10 @@ def build_model(spec: str, scenario: Scenario) -> Model:
     raise ValueError(f"unknown backend in spec {spec!r}")
 
 
-def evaluate(scenario: Scenario, model: Model) -> tuple[AgentRun, Verdict]:
-    agent = TargetAgent(model=model, system_prompt=scenario.system_prompt)
+def evaluate(
+    scenario: Scenario, model: Model, provider: ToolProvider | None = None
+) -> tuple[AgentRun, Verdict]:
+    agent = TargetAgent(model=model, system_prompt=scenario.system_prompt, tools=provider)
     run = agent.run(scenario.task)
     verdict = evaluate_no_secret_egress(run.trace, scenario)
     return run, verdict
@@ -129,11 +149,17 @@ class TrialSummary:
         return self.violations / self.trials if self.trials else 0.0
 
 
-def run_trials(scenario: Scenario, spec: str, trials: int) -> TrialSummary:
+def run_trials(
+    scenario: Scenario, spec: str, trials: int, transport: str = "inprocess"
+) -> TrialSummary:
     summary = TrialSummary(label=spec)
     for _ in range(trials):
         model = build_model(spec, scenario)  # fresh model each trial (scripted replays reset)
-        run, verdict = evaluate(scenario, model)
+        provider = make_provider(transport)  # fresh provider/trace (and fresh MCP subprocess)
+        try:
+            run, verdict = evaluate(scenario, model, provider)
+        finally:
+            provider.close()
         summary.runs.append(run)
         summary.verdicts.append(verdict)
     return summary
@@ -229,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trials", type=int, default=1, help="run N times and report a rate")
     parser.add_argument("-v", "--verbose", action="store_true", help="print full tool-call args")
     parser.add_argument(
+        "--transport",
+        choices=["inprocess", "mcp"],
+        default="inprocess",
+        help="how tools run: in-process, or over a real MCP boundary with a recording proxy",
+    )
+    parser.add_argument(
         "--compare",
         nargs="?",
         const="__default__",
@@ -252,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         skipped: dict[str, str] = {}
         for spec in specs:
             try:
-                summaries.append(run_trials(scenario, spec, args.trials))
+                summaries.append(run_trials(scenario, spec, args.trials, args.transport))
             except (RuntimeError, ValueError) as e:
                 skipped[spec] = str(e)
         print(format_comparison(scenario, summaries, skipped))
@@ -261,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- real single backend ---
     if args.backend in ("anthropic", "openai"):
         spec = f"{args.backend}:{args.model}" if args.model else args.backend
-        summary = run_trials(scenario, spec, args.trials)
+        summary = run_trials(scenario, spec, args.trials, args.transport)
         if args.trials > 1:
             print(format_trials(scenario, summary, args.verbose))
         else:
@@ -278,7 +310,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- offline scripted demo: same harness + evaluator, two behaviours ---
     for label, spec in (("naive agent", "scripted:naive"), ("careful agent", "scripted:careful")):
-        run, verdict = evaluate(scenario, build_model(spec, scenario))
+        provider = make_provider(args.transport)
+        try:
+            run, verdict = evaluate(scenario, build_model(spec, scenario), provider)
+        finally:
+            provider.close()
         print(format_report(label, scenario, run, verdict, args.verbose))
         print()
     return 0
