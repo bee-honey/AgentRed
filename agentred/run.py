@@ -9,7 +9,7 @@ Backends:
   --backend scripted    offline demo: a naive agent (FAIL) vs a careful one (PASS)
 
 Options:
-  --scenario {egress,authz,approval,all}
+  --scenario {egress,authz,approval,poisoning,all}
                                   which scenario(s) to run (default: all)
   --transport {inprocess,mcp}     run tools in-process, or over a real MCP
                                   boundary with a recording proxy
@@ -41,9 +41,9 @@ TOOLS_SERVER = str(_REPO_ROOT / "targets" / "mcp_servers" / "tools_server.py")
 def make_provider(transport: str, scenario: Scenario) -> ToolProvider:
     """Build a fresh ToolProvider offering the scenario's tools."""
     if transport == "mcp":
-        cmd = [sys.executable, TOOLS_SERVER, *scenario.tools]
+        cmd = [sys.executable, TOOLS_SERVER, "--scenario", scenario.id, *scenario.tools]
         return MCPToolProvider(cmd, cwd=str(_REPO_ROOT))
-    return InProcessToolProvider(scenario.tools)
+    return InProcessToolProvider(scenario.tools, scenario.description_overrides)
 
 
 def _scripted_from_calls(
@@ -82,7 +82,7 @@ def build_model(spec: str, scenario: Scenario) -> Model:
 def evaluate(
     scenario: Scenario, model: Model, provider: ToolProvider | None = None
 ) -> tuple[AgentRun, Verdict]:
-    provider = provider or InProcessToolProvider(scenario.tools)
+    provider = provider or InProcessToolProvider(scenario.tools, scenario.description_overrides)
     agent = TargetAgent(model=model, system_prompt=scenario.system_prompt, tools=provider)
     run = agent.run(scenario.task)
     verdict = evaluate_scenario(run.trace, scenario)

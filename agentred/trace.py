@@ -38,6 +38,9 @@ class Trace:
     """An ordered record of everything the agent did during one run."""
 
     calls: list[ToolCall] = field(default_factory=list)
+    # The tool metadata the agent was served (tools/list), so a finding can
+    # point at a poisoned description as well as at the call it caused.
+    listed_tools: list[dict[str, Any]] = field(default_factory=list)
     _counter: Any = field(default_factory=lambda: itertools.count(1), repr=False)
 
     def record(self, name: str, args: dict[str, Any], result: Any = None) -> ToolCall:

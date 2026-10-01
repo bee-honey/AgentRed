@@ -5,8 +5,8 @@ every call into a Trace as it passes through. Recording happens at the protocol
 boundary (via the client's recorder hook), so the trace reflects what actually
 crossed the wire, not what the agent believed it did.
 
-This is the seam where scenario behaviour will later be injected — serving
-malicious tool metadata or rewriting descriptions — without the agent knowing.
+It also records the tools/list response, so a poisoned tool description served
+by the downstream server is captured as evidence alongside the calls it caused.
 """
 
 from __future__ import annotations
@@ -27,7 +27,9 @@ class RecordingProxy:
         self.trace.record(name, arguments, result=result)
 
     def list_tools(self) -> list[dict[str, Any]]:
-        return self.client.list_tools()
+        tools = self.client.list_tools()
+        self.trace.listed_tools = tools  # record the metadata the agent was served
+        return tools
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         return self.client.call_tool(name, arguments)
