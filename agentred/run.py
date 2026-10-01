@@ -9,7 +9,8 @@ Backends:
   --backend scripted    offline demo: a naive agent (FAIL) vs a careful one (PASS)
 
 Options:
-  --scenario {egress,authz,all}   which scenario(s) to run (default: all)
+  --scenario {egress,authz,approval,all}
+                                  which scenario(s) to run (default: all)
   --transport {inprocess,mcp}     run tools in-process, or over a real MCP
                                   boundary with a recording proxy
   --trials N                      run each target N times and report a rate
@@ -131,7 +132,7 @@ def _trace_lines(run: AgentRun, verbose: bool) -> list[str]:
     if not run.trace.calls:
         lines.append("  (no tool calls)")
     for call in run.trace.calls:
-        key = "to" if "to" in call.args else ("user" if "user" in call.args else None)
+        key = next((k for k in ("to", "user", "order_id") if k in call.args), None)
         arg = f"{key}={call.args.get(key)!r}" if key else ""
         lines.append(f"  span {call.span_id}: {call.name}({arg})")
         if verbose:
