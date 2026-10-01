@@ -86,11 +86,16 @@ _CSS = """
   --warn-bg: #fff4e0; --code: #f4f3f0;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161615; --fg: #ecebe7; --muted: #9b9a94; --line: #2e2d2a; --card: #1e1e1c;
-    --fail: #ff8a80; --fail-bg: #3a1a17; --pass: #7ee2a0; --pass-bg: #15301e;
-    --warn-bg: #3a2c12; --code: #262523;
+  :root:not([data-theme="light"]) {
+  --bg: #161615; --fg: #ecebe7; --muted: #9b9a94; --line: #2e2d2a; --card: #1e1e1c;
+  --fail: #ff8a80; --fail-bg: #3a1a17; --pass: #7ee2a0; --pass-bg: #15301e;
+  --warn-bg: #3a2c12; --code: #262523; color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --fg: #ecebe7; --muted: #9b9a94; --line: #2e2d2a; --card: #1e1e1c;
+  --fail: #ff8a80; --fail-bg: #3a1a17; --pass: #7ee2a0; --pass-bg: #15301e;
+  --warn-bg: #3a2c12; --code: #262523; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
