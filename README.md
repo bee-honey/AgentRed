@@ -34,7 +34,17 @@ agentred --scenario egress --transport mcp -v
 
 # 6. Swap in published attacks: every scenario x every AgentDojo attack template.
 agentred --attacks agentdojo --compare "openai:gpt-4o,openai:gpt-4o-mini" --trials 3
+
+# 7. Keep the evidence: add --report to any run for report.json + report.html.
+agentred --attacks agentdojo --compare "openai:gpt-4o,openai:gpt-4o-mini" --report
 ```
+
+**Reports.** `--report [DIR]` (default `agentred-report/`) writes every trial —
+scenario, attack, target, the payload the agent saw (including poisoned tool
+descriptions served over `tools/list`), the recorded tool calls, and the findings
+pinned to the violating span — to `report.json`, plus a single self-contained
+`report.html` (inline CSS, no JavaScript) with a violation matrix per scenario
+where each cell links to its traces.
 
 **Attack corpora.** Each scenario declares *where* its payload lands (the task, or
 a tool description) and *what* the attacker wants (an injection goal). `--attacks`

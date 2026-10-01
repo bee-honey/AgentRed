@@ -19,6 +19,8 @@ Options:
   --attacks CORPUS                also run each scenario with every attack template
                                   in a published corpus (e.g. agentdojo, or a JSON
                                   path) and report an attack x target table
+  --report [DIR]                  write report.json + report.html (every trial's
+                                  trace and findings) to DIR (default: agentred-report)
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from .attacks import builtin_corpora, load_corpus, scenario_variants
 from .env import load_dotenv
 from .judge import Verdict, evaluate_scenario
 from .models import Model, ModelTurn, ScriptedModel, ToolUse
+from .report import Report
 from .scenario import SCENARIOS, Scenario
 
 DEFAULT_COMPARE = ("scripted:naive", "scripted:careful", "openai:gpt-4o", "openai:gpt-4o-mini")
@@ -115,7 +118,11 @@ class TrialSummary:
 
 
 def run_trials(
-    scenario: Scenario, spec: str, trials: int, transport: str = "inprocess"
+    scenario: Scenario,
+    spec: str,
+    trials: int,
+    transport: str = "inprocess",
+    report: Report | None = None,
 ) -> TrialSummary:
     summary = TrialSummary(label=spec)
     for _ in range(trials):
@@ -127,6 +134,8 @@ def run_trials(
             provider.close()
         summary.runs.append(run)
         summary.verdicts.append(verdict)
+    if report is not None:
+        report.add(scenario, summary)
     return summary
 
 
@@ -241,7 +250,7 @@ def _targets(args: argparse.Namespace) -> list[str]:
     return ["scripted:naive", "scripted:careful"]
 
 
-def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace) -> int:
+def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace, report: Report | None) -> int:
     attacks = load_corpus(args.attacks)
     variants = scenario_variants(scenario, attacks)
     targets, skipped = _targets(args), {}
@@ -249,7 +258,9 @@ def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace) -> int:
     for spec in targets:
         try:
             for variant in variants:
-                rows[variant.attack][spec] = run_trials(variant, spec, args.trials, args.transport)
+                rows[variant.attack][spec] = run_trials(
+                    variant, spec, args.trials, args.transport, report
+                )
         except (RuntimeError, ValueError) as e:
             skipped[spec] = str(e)
     ran = [t for t in targets if t not in skipped]
@@ -260,9 +271,11 @@ def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace) -> int:
 # ---------- entrypoint ----------
 
 
-def _run_one_scenario(scenario: Scenario, args: argparse.Namespace) -> int:
+def _run_one_scenario(
+    scenario: Scenario, args: argparse.Namespace, report: Report | None = None
+) -> int:
     if args.attacks:
-        return _run_attack_matrix(scenario, args)
+        return _run_attack_matrix(scenario, args, report)
 
     # comparison mode
     if args.compare is not None:
@@ -271,7 +284,7 @@ def _run_one_scenario(scenario: Scenario, args: argparse.Namespace) -> int:
         skipped: dict[str, str] = {}
         for spec in specs:
             try:
-                summaries.append(run_trials(scenario, spec, args.trials, args.transport))
+                summaries.append(run_trials(scenario, spec, args.trials, args.transport, report))
             except (RuntimeError, ValueError) as e:
                 skipped[spec] = str(e)
         print(format_comparison(scenario, summaries, skipped))
@@ -280,7 +293,7 @@ def _run_one_scenario(scenario: Scenario, args: argparse.Namespace) -> int:
     # real single backend
     if args.backend in ("anthropic", "openai"):
         spec = f"{args.backend}:{args.model}" if args.model else args.backend
-        summary = run_trials(scenario, spec, args.trials, args.transport)
+        summary = run_trials(scenario, spec, args.trials, args.transport, report)
         if args.trials > 1:
             print(format_trials(scenario, summary, args.verbose))
         else:
@@ -298,11 +311,8 @@ def _run_one_scenario(scenario: Scenario, args: argparse.Namespace) -> int:
     # offline scripted demo: same harness + evaluator, two behaviours
     rc = 0
     for label, spec in (("naive agent", "scripted:naive"), ("careful agent", "scripted:careful")):
-        provider = make_provider(args.transport, scenario)
-        try:
-            run, verdict = evaluate(scenario, build_model(spec, scenario), provider)
-        finally:
-            provider.close()
+        summary = run_trials(scenario, spec, 1, args.transport, report)
+        run, verdict = summary.runs[0], summary.verdicts[0]
         print(format_report(label, scenario, run, verdict, args.verbose))
         print()
         rc |= 0 if verdict.passed else 0  # demo always exits 0
@@ -330,6 +340,10 @@ def main(argv: list[str] | None = None) -> int:
         "--attacks", default=None, metavar="CORPUS",
         help=f"run every attack template in a corpus ({', '.join(builtin_corpora())} or a JSON path)",
     )
+    parser.add_argument(
+        "--report", nargs="?", const="agentred-report", default=None, metavar="DIR",
+        help="write report.json + report.html with every trial's trace (default dir: agentred-report)",
+    )
     args = parser.parse_args(argv)
 
     load_dotenv()  # pick up keys from a local .env (real env vars still win)
@@ -337,9 +351,13 @@ def main(argv: list[str] | None = None) -> int:
     selected = (
         list(SCENARIOS.values()) if args.scenario == "all" else [SCENARIOS[args.scenario]]
     )
+    report = Report() if args.report else None
     rc = 0
     for scenario in selected:
-        rc |= _run_one_scenario(scenario, args)
+        rc |= _run_one_scenario(scenario, args, report)
+    if report is not None:
+        json_path, html_path = report.write(args.report)
+        print(f"Report: {html_path}  (data: {json_path})")
     return rc
 
 
