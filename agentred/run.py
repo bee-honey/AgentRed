@@ -16,6 +16,9 @@ Options:
   --trials N                      run each target N times and report a rate
   -v / --verbose                  print full tool-call arguments
   --compare "spec,..."            compare several backend:model targets in a table
+  --attacks CORPUS                also run each scenario with every attack template
+                                  in a published corpus (e.g. agentdojo, or a JSON
+                                  path) and report an attack x target table
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from pathlib import Path
 
 from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
 from .agent import AgentRun, TargetAgent
+from .attacks import builtin_corpora, load_corpus, scenario_variants
 from .env import load_dotenv
 from .judge import Verdict, evaluate_scenario
 from .models import Model, ModelTurn, ScriptedModel, ToolUse
@@ -41,7 +45,9 @@ TOOLS_SERVER = str(_REPO_ROOT / "targets" / "mcp_servers" / "tools_server.py")
 def make_provider(transport: str, scenario: Scenario) -> ToolProvider:
     """Build a fresh ToolProvider offering the scenario's tools."""
     if transport == "mcp":
-        cmd = [sys.executable, TOOLS_SERVER, "--scenario", scenario.id, *scenario.tools]
+        cmd = [sys.executable, TOOLS_SERVER, *scenario.tools]
+        for tool, description in scenario.description_overrides.items():
+            cmd += ["--description", tool, description]
         return MCPToolProvider(cmd, cwd=str(_REPO_ROOT))
     return InProcessToolProvider(scenario.tools, scenario.description_overrides)
 
@@ -193,17 +199,74 @@ def format_comparison(scenario: Scenario, summaries: list[TrialSummary], skipped
     return "\n".join(lines)
 
 
+def format_attack_matrix(
+    scenario: Scenario,
+    source: str,
+    rows: dict[str, dict[str, TrialSummary]],
+    targets: list[str],
+    skipped: dict[str, str],
+) -> str:
+    """Rows are attacks, columns are targets, cells are violations/trials."""
+    width = max(12, *(len(t) + 2 for t in targets))
+    lines = [
+        *_header(scenario, f"attack corpus: {source} ({len(rows)} attacks incl. handwritten)"),
+        f"{'attack':<26}" + "".join(f"{t:>{width}}" for t in targets),
+        "-" * (26 + width * len(targets)),
+    ]
+    for attack, cells in rows.items():
+        lines.append(
+            f"{attack:<26}"
+            + "".join(f"{cells[t].violations}/{cells[t].trials}".rjust(width) for t in targets)
+        )
+    lines.append("-" * (26 + width * len(targets)))
+    totals = []
+    for t in targets:
+        viol = sum(rows[a][t].violations for a in rows)
+        n = sum(rows[a][t].trials for a in rows)
+        totals.append(f"{viol}/{n} ({viol / n * 100:.0f}%)" if n else "—")
+    lines.append(f"{'total':<26}" + "".join(c.rjust(width) for c in totals))
+    for spec, why in skipped.items():
+        lines.append(f"skipped {spec}: {why}")
+    lines.append("=" * 64)
+    return "\n".join(lines)
+
+
+def _targets(args: argparse.Namespace) -> list[str]:
+    if args.compare is not None:
+        if args.compare == "__default__":
+            return list(DEFAULT_COMPARE)
+        return [s.strip() for s in args.compare.split(",") if s.strip()]
+    if args.backend in ("anthropic", "openai"):
+        return [f"{args.backend}:{args.model}" if args.model else args.backend]
+    return ["scripted:naive", "scripted:careful"]
+
+
+def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace) -> int:
+    attacks = load_corpus(args.attacks)
+    variants = scenario_variants(scenario, attacks)
+    targets, skipped = _targets(args), {}
+    rows: dict[str, dict[str, TrialSummary]] = {v.attack: {} for v in variants}
+    for spec in targets:
+        try:
+            for variant in variants:
+                rows[variant.attack][spec] = run_trials(variant, spec, args.trials, args.transport)
+        except (RuntimeError, ValueError) as e:
+            skipped[spec] = str(e)
+    ran = [t for t in targets if t not in skipped]
+    print(format_attack_matrix(scenario, attacks[0].source, rows, ran, skipped))
+    return 0
+
+
 # ---------- entrypoint ----------
 
 
 def _run_one_scenario(scenario: Scenario, args: argparse.Namespace) -> int:
+    if args.attacks:
+        return _run_attack_matrix(scenario, args)
+
     # comparison mode
     if args.compare is not None:
-        specs = (
-            list(DEFAULT_COMPARE)
-            if args.compare == "__default__"
-            else [s.strip() for s in args.compare.split(",") if s.strip()]
-        )
+        specs = _targets(args)
         summaries: list[TrialSummary] = []
         skipped: dict[str, str] = {}
         for spec in specs:
@@ -262,6 +325,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--compare", nargs="?", const="__default__", default=None,
         help="comma-separated backend:model specs to compare (default: a preset set)",
+    )
+    parser.add_argument(
+        "--attacks", default=None, metavar="CORPUS",
+        help=f"run every attack template in a corpus ({', '.join(builtin_corpora())} or a JSON path)",
     )
     args = parser.parse_args(argv)
 

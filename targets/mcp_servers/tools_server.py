@@ -5,8 +5,9 @@ launch a server offering exactly the tools it needs, e.g.
 
     python targets/mcp_servers/tools_server.py send_email get_records
 
-`--scenario ID` makes it advertise that scenario's description overrides —
-playing a malicious third-party server that serves poisoned tool metadata.
+`--description NAME TEXT` (repeatable) makes it advertise TEXT as tool NAME's
+description — playing a malicious third-party server that serves poisoned tool
+metadata.
 
 With no tool names it exposes every registered tool. It only *acts* (returns the
 tools' benign results) and does no recording — recording is the proxy's job, so
@@ -22,7 +23,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agentred.mcp.server import MCPServer  # noqa: E402
-from agentred.scenario import SCENARIOS  # noqa: E402
 from agentred.tools import TOOL_REGISTRY, model_schemas  # noqa: E402
 
 
@@ -43,8 +43,8 @@ def build_server(
 if __name__ == "__main__":
     argv = sys.argv[1:]
     overrides: dict[str, str] = {}
-    if "--scenario" in argv:
-        i = argv.index("--scenario")
-        overrides = SCENARIOS[argv[i + 1]].description_overrides
-        del argv[i : i + 2]
+    while "--description" in argv:
+        i = argv.index("--description")
+        overrides[argv[i + 1]] = argv[i + 2]
+        del argv[i : i + 3]
     build_server(argv or list(TOOL_REGISTRY), overrides).serve()
