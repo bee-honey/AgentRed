@@ -38,6 +38,7 @@ from .judge import Verdict, evaluate_scenario
 from .models import Model, ModelTurn, ScriptedModel, ToolUse
 from .report import Report
 from .scenario import SCENARIOS, Scenario
+from .stats import format_ci, format_rate, pairwise_lines
 
 DEFAULT_COMPARE = ("scripted:naive", "scripted:careful", "openai:gpt-4o", "openai:gpt-4o-mini")
 
@@ -191,7 +192,7 @@ def format_trials(scenario: Scenario, summary: TrialSummary, verbose: bool) -> s
                 lines.append(f"  - [{f.invariant}] span {f.span_id}: {f.reason}")
     lines += [
         "",
-        f"VIOLATION RATE: {summary.violations}/{summary.trials} ({summary.rate * 100:.0f}%)",
+        f"VIOLATION RATE: {format_rate(summary.violations, summary.trials)}",
         "=" * 64,
     ]
     return "\n".join(lines)
@@ -200,14 +201,19 @@ def format_trials(scenario: Scenario, summary: TrialSummary, verbose: bool) -> s
 def format_comparison(scenario: Scenario, summaries: list[TrialSummary], skipped: dict) -> str:
     lines = [
         *_header(scenario, "model comparison"),
-        f"{'target':<28}{'trials':>7}{'viol':>6}{'rate':>8}",
-        "-" * 49,
+        f"{'target':<28}{'trials':>7}{'viol':>6}{'rate':>7}{'95% CI':>12}",
+        "-" * 60,
     ]
     for s in summaries:
-        lines.append(f"{s.label:<28}{s.trials:>7}{s.violations:>6}{s.rate * 100:>7.0f}%")
+        lines.append(
+            f"{s.label:<28}{s.trials:>7}{s.violations:>6}{s.rate:>7.0%}"
+            f"{format_ci(s.violations, s.trials):>12}"
+        )
     for spec, why in skipped.items():
         short = why if len(why) < 30 else why[:27] + "..."
         lines.append(f"{spec:<28}{'—':>7}{'—':>6}{'skipped':>8}  ({short})")
+    if pairs := pairwise_lines([(s.label, s.violations, s.trials) for s in summaries]):
+        lines += ["", *pairs]
     lines.append("=" * 64)
     return "\n".join(lines)
 
@@ -232,12 +238,16 @@ def format_attack_matrix(
             + "".join(f"{cells[t].violations}/{cells[t].trials}".rjust(width) for t in targets)
         )
     lines.append("-" * (26 + width * len(targets)))
-    totals = []
-    for t in targets:
-        viol = sum(rows[a][t].violations for a in rows)
-        n = sum(rows[a][t].trials for a in rows)
-        totals.append(f"{viol}/{n} ({viol / n * 100:.0f}%)" if n else "—")
-    lines.append(f"{'total':<26}" + "".join(c.rjust(width) for c in totals))
+    counts = [
+        (t, sum(rows[a][t].violations for a in rows), sum(rows[a][t].trials for a in rows))
+        for t in targets
+    ]
+    lines.append(
+        f"{'total':<26}" + "".join(f"{k}/{n} ({k / n:.0%})".rjust(width) for _, k, n in counts)
+    )
+    lines.append(f"{'95% CI':<26}" + "".join(format_ci(k, n).rjust(width) for _, k, n in counts))
+    if pairs := pairwise_lines(counts):
+        lines += ["", *pairs]
     for spec, why in skipped.items():
         lines.append(f"skipped {spec}: {why}")
     lines.append("=" * 64)

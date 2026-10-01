@@ -21,6 +21,7 @@ from typing import Any
 
 from . import __version__
 from .scenario import Scenario
+from .stats import format_ci, pairwise_lines, wilson_interval
 
 
 @dataclass
@@ -149,6 +150,15 @@ details > div { padding: 0 12px 12px; }
 .span { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; margin: 8px 0; }
 .span.violation { border-left-color: var(--fail); }
 .finding { color: var(--fail); font-weight: 600; }
+tr.total td { font-weight: 600; }
+tr.ci td { color: var(--muted); font-size: 13px; }
+.ci-text { display: block; font-variant-numeric: tabular-nums; }
+.ci-track { position: relative; display: block; height: 6px; margin: 4px auto 0;
+  max-width: 140px; background: var(--code); border-radius: 3px; }
+.ci-range { position: absolute; top: 0; bottom: 0; background: var(--muted);
+  opacity: 0.45; border-radius: 3px; }
+.ci-point { position: absolute; top: -2px; width: 2px; height: 10px; margin-left: -1px;
+  background: var(--fg); }
 """
 
 
@@ -156,6 +166,17 @@ def _rate_class(viol: int, n: int) -> str:
     if viol == 0:
         return "r0"
     return "rall" if viol == n else "rsome"
+
+
+def _ci_bar(k: int, n: int) -> str:
+    """The 95% interval as text over a 0–100% track, with the point estimate marked."""
+    lo, hi = wilson_interval(k, n)
+    return (
+        f'<span class="ci-text">{format_ci(k, n)}</span>'
+        f'<span class="ci-track" aria-hidden="true">'
+        f'<span class="ci-range" style="left:{lo:.1%};width:{hi - lo:.1%}"></span>'
+        f'<span class="ci-point" style="left:{k / n:.1%}"></span></span>'
+    )
 
 
 def _anchor(*parts: str) -> str:
@@ -271,11 +292,25 @@ def render_html(data: dict[str, Any]) -> str:
                     continue
                 viol = sum(1 for r in cell if not r["passed"])
                 body.append(
-                    f'<td class="cell {_rate_class(viol, len(cell))}">'
+                    f'<td class="cell {_rate_class(viol, len(cell))}" '
+                    f'title="95% CI {format_ci(viol, len(cell))}">'
                     f'<a href="#{_anchor(sid, a, t)}">{viol}/{len(cell)}</a></td>'
                 )
             body.append("</tr>")
-        body.append("</table></div>")
+        counts = [
+            (t, sum(1 for r in recs if r["target"] == t and not r["passed"]),
+             sum(1 for r in recs if r["target"] == t))
+            for t in targets
+        ]
+        if len(attacks) > 1:
+            body.append('<tr class="total"><td>total</td>')
+            body += [f'<td class="cell">{k}/{n} ({k / n:.0%})</td>' for _, k, n in counts]
+            body.append("</tr>")
+        body.append('<tr class="ci"><td>95% CI</td>')
+        body += [f'<td class="cell">{_ci_bar(k, n)}</td>' for _, k, n in counts]
+        body.append("</tr></table></div>")
+        if pairs := pairwise_lines(counts):
+            body.append('<p class="muted">' + "<br>".join(escape(p.strip()) for p in pairs) + "</p>")
 
         for a in attacks:
             variant = next(r for r in recs if r["attack"] == a)
