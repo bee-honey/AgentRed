@@ -23,6 +23,9 @@ class ToolCall:
     result: Any = None
     span_id: int = 0
     ts: float = field(default_factory=time.time)
+    # True when a control refused the call before it reached the tool: the agent
+    # *attempted* it, but nothing executed. Invariants judge executed calls only.
+    blocked: bool = False
 
     def args_blob(self) -> str:
         """All argument values flattened to a searchable string.
@@ -43,10 +46,27 @@ class Trace:
     listed_tools: list[dict[str, Any]] = field(default_factory=list)
     _counter: Any = field(default_factory=lambda: itertools.count(1), repr=False)
 
-    def record(self, name: str, args: dict[str, Any], result: Any = None) -> ToolCall:
-        call = ToolCall(name=name, args=dict(args), result=result, span_id=next(self._counter))
+    # Control events that aren't tool calls, e.g. a served tool description that
+    # didn't match its pinned version.
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(
+        self, name: str, args: dict[str, Any], result: Any = None, blocked: bool = False
+    ) -> ToolCall:
+        call = ToolCall(
+            name=name, args=dict(args), result=result, span_id=next(self._counter), blocked=blocked
+        )
         self.calls.append(call)
         return call
+
+    @property
+    def executed(self) -> list[ToolCall]:
+        """Calls that actually ran (not blocked by a control)."""
+        return [c for c in self.calls if not c.blocked]
+
+    @property
+    def blocked(self) -> list[ToolCall]:
+        return [c for c in self.calls if c.blocked]
 
     def calls_to(self, tool_name: str) -> list[ToolCall]:
         return [c for c in self.calls if c.name == tool_name]

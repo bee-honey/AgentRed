@@ -56,6 +56,7 @@ class Report:
                     "attack": scenario.attack,
                     "injection_point": scenario.injection_point,
                     "target": summary.label,
+                    "design": getattr(summary, "design", "prompt-only"),
                     "trial": trial,
                     "passed": verdict.passed,
                     "task": scenario.task,
@@ -65,9 +66,13 @@ class Report:
                         if scenario.server_command or t["name"] in scenario.description_overrides
                     },
                     "trace": [
-                        {"span_id": c.span_id, "tool": c.name, "args": c.args, "result": c.result}
+                        {
+                            "span_id": c.span_id, "tool": c.name, "args": c.args,
+                            "result": c.result, "blocked": c.blocked,
+                        }
                         for c in run.trace.calls
                     ],
+                    "events": run.trace.events,
                     "findings": [
                         {"span_id": f.span_id, "invariant": f.invariant, "reason": f.reason}
                         for f in verdict.findings
@@ -149,6 +154,8 @@ details > div { padding: 0 12px 12px; }
 .badge.pass { background: var(--pass-bg); color: var(--pass); }
 .span { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; margin: 8px 0; }
 .span.violation { border-left-color: var(--fail); }
+.span.blocked { border-left-color: var(--pass); }
+.badge.block { background: var(--pass-bg); color: var(--pass); margin-left: 6px; }
 .finding { color: var(--fail); font-weight: 600; }
 tr.total td { font-weight: 600; }
 tr.ci td { color: var(--muted); font-size: 13px; }
@@ -196,10 +203,13 @@ def _trial_html(rec: dict[str, Any]) -> str:
         out.append('<p class="muted">No tool calls.</p>')
     for call in rec["trace"]:
         finding = bad.get(call["span_id"])
+        blocked = call.get("blocked", False)
         args = json.dumps(call["args"], indent=2, ensure_ascii=False, default=str)
+        kind = " violation" if finding else (" blocked" if blocked else "")
+        badge = ' <span class="badge block">BLOCKED</span>' if blocked else ""
         out.append(
-            f'<div class="span{" violation" if finding else ""}">'
-            f'<code>span {call["span_id"]}: {escape(call["tool"])}</code>'
+            f'<div class="span{kind}">'
+            f'<code>span {call["span_id"]}: {escape(call["tool"])}</code>{badge}'
             f"<pre>{escape(args)}</pre>"
             f'<div class="muted"><code>→ {escape(str(call["result"]))}</code></div>'
         )

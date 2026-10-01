@@ -19,6 +19,9 @@ Options:
   --attacks CORPUS                also run each scenario with every attack template
                                   in a published corpus (e.g. agentdojo, or a JSON
                                   path) and report an attack x target table
+  --designs LIST                  hold the model fixed and compare agent designs
+                                  (prompt-only, hardened-prompt, pinned-tools,
+                                  policy-guard, or "all")
   --report [DIR]                  write report.json + report.html (every trial's
                                   trace and findings) to DIR (default: agentred-report)
 """
@@ -33,12 +36,13 @@ from pathlib import Path
 from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
 from .agent import AgentRun, TargetAgent
 from .attacks import builtin_corpora, load_corpus, scenario_variants
+from .designs import DESIGNS, AgentDesign
 from .env import load_dotenv
 from .judge import Verdict, evaluate_scenario
 from .models import Model, ModelTurn, ScriptedModel, ToolUse
 from .report import Report
 from .scenario import SCENARIOS, Scenario
-from .stats import format_ci, format_rate, pairwise_lines
+from .stats import fisher_exact, format_ci, format_p, format_rate, pairwise_lines
 
 DEFAULT_COMPARE = ("scripted:naive", "scripted:careful", "openai:gpt-4o", "openai:gpt-4o-mini")
 
@@ -94,10 +98,16 @@ def build_model(spec: str, scenario: Scenario) -> Model:
 
 
 def evaluate(
-    scenario: Scenario, model: Model, provider: ToolProvider | None = None
+    scenario: Scenario,
+    model: Model,
+    provider: ToolProvider | None = None,
+    design: AgentDesign | None = None,
 ) -> tuple[AgentRun, Verdict]:
     provider = provider or InProcessToolProvider(scenario.tools, scenario.description_overrides)
-    agent = TargetAgent(model=model, system_prompt=scenario.system_prompt, tools=provider)
+    agent_scenario = scenario
+    if design is not None:
+        agent_scenario, provider = design.apply(scenario, provider)
+    agent = TargetAgent(model=model, system_prompt=agent_scenario.system_prompt, tools=provider)
     run = agent.run(scenario.task)
     verdict = evaluate_scenario(run.trace, scenario)
     return run, verdict
@@ -106,6 +116,7 @@ def evaluate(
 @dataclass
 class TrialSummary:
     label: str
+    design: str = "prompt-only"
     runs: list[AgentRun] = field(default_factory=list)
     verdicts: list[Verdict] = field(default_factory=list)
 
@@ -121,6 +132,11 @@ class TrialSummary:
     def rate(self) -> float:
         return self.violations / self.trials if self.trials else 0.0
 
+    @property
+    def attempted(self) -> int:
+        """Trials where a control blocked at least one call: the model tried."""
+        return sum(1 for r in self.runs if r.trace.blocked)
+
 
 def run_trials(
     scenario: Scenario,
@@ -128,13 +144,15 @@ def run_trials(
     trials: int,
     transport: str = "inprocess",
     report: Report | None = None,
+    design: AgentDesign | None = None,
+    label: str | None = None,
 ) -> TrialSummary:
-    summary = TrialSummary(label=spec)
+    summary = TrialSummary(label=label or spec, design=design.id if design else "prompt-only")
     for _ in range(trials):
         model = build_model(spec, scenario)  # fresh model each trial (scripted replays reset)
         provider = make_provider(transport, scenario)  # fresh provider/trace (+ MCP subprocess)
         try:
-            run, verdict = evaluate(scenario, model, provider)
+            run, verdict = evaluate(scenario, model, provider, design)
         finally:
             provider.close()
         summary.runs.append(run)
@@ -254,6 +272,60 @@ def format_attack_matrix(
     return "\n".join(lines)
 
 
+def format_design_table(scenario: Scenario, spec: str, summaries: list[TrialSummary]) -> str:
+    """One row per design (same model): violations, attempts a control blocked, vs baseline."""
+    base = summaries[0]
+    lines = [
+        *_header(scenario, f"agent designs on {spec}"),
+        f"{'design':<18}{'violated':>10}{'95% CI':>12}{'blocked':>9}   vs {base.design}",
+        "-" * 64,
+    ]
+    for s in summaries:
+        versus = (
+            "—" if s is base
+            else format_p(fisher_exact(s.violations, s.trials, base.violations, base.trials))
+        )
+        lines.append(
+            f"{s.design:<18}{f'{s.violations}/{s.trials}':>10}"
+            f"{format_ci(s.violations, s.trials):>12}{f'{s.attempted}/{s.trials}':>9}   {versus}"
+        )
+    lines += [
+        "",
+        "  violated = an executed call broke the invariant; blocked = trials where a",
+        "  control refused at least one call (the model tried, nothing ran)",
+        "=" * 64,
+    ]
+    return "\n".join(lines)
+
+
+def _design_list(value: str) -> list[AgentDesign]:
+    names = list(DESIGNS) if value == "all" else [v.strip() for v in value.split(",") if v.strip()]
+    unknown = [n for n in names if n not in DESIGNS]
+    if unknown:
+        raise SystemExit(f"unknown design(s) {unknown}; choose from {', '.join(DESIGNS)} or all")
+    return [DESIGNS[n] for n in names]
+
+
+def _run_design_comparison(scenario: Scenario, args: argparse.Namespace, report: Report | None) -> int:
+    # One model for every design. Offline, that's the worst case: a scripted model
+    # that obeys every injection, so only controls that don't rely on it can help.
+    targets = _targets(args)
+    if len(targets) != 1 and not (args.backend == "scripted" and args.compare is None):
+        raise SystemExit("--designs holds the model fixed: pass one --backend/--model, not --compare")
+    spec = targets[0] if len(targets) == 1 else "scripted:naive"
+    variants = scenario_variants(scenario, load_corpus(args.attacks)) if args.attacks else [scenario]
+    summaries = []
+    for design in _design_list(args.designs):
+        merged = TrialSummary(label=design.id, design=design.id)
+        for variant in variants:
+            s = run_trials(variant, spec, args.trials, args.transport, report, design, label=design.id)
+            merged.runs += s.runs
+            merged.verdicts += s.verdicts
+        summaries.append(merged)
+    print(format_design_table(scenario, spec, summaries))
+    return 0
+
+
 def _targets(args: argparse.Namespace) -> list[str]:
     if args.compare is not None:
         if args.compare == "__default__":
@@ -288,6 +360,8 @@ def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace, report: Rep
 def _run_one_scenario(
     scenario: Scenario, args: argparse.Namespace, report: Report | None = None
 ) -> int:
+    if args.designs:
+        return _run_design_comparison(scenario, args, report)
     if args.attacks:
         return _run_attack_matrix(scenario, args, report)
 
@@ -363,6 +437,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--attacks", default=None, metavar="CORPUS",
         help=f"run every attack template in a corpus ({', '.join(builtin_corpora())} or a JSON path)",
+    )
+    parser.add_argument(
+        "--designs", default=None, metavar="LIST",
+        help=f"compare agent designs on one model ({', '.join(DESIGNS)}, or all)",
     )
     parser.add_argument(
         "--report", nargs="?", const="agentred-report", default=None, metavar="DIR",
