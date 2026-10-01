@@ -28,6 +28,21 @@ class Report:
     command: str = field(default_factory=lambda: " ".join(["agentred", *sys.argv[1:]]))
     generated_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S %Z"))
     records: list[dict[str, Any]] = field(default_factory=list)
+    audits: list[dict[str, Any]] = field(default_factory=list)
+
+    def add_audit(self, server: str, command: list[str], tools: list[dict[str, Any]], findings: list[Any]) -> None:
+        """Record a third-party server's tool metadata and its heuristic audit."""
+        self.audits.append(
+            {
+                "server": server,
+                "command": command,
+                "tools": [{"name": t["name"], "description": t.get("description", "")} for t in tools],
+                "findings": [
+                    {"tool": f.tool, "location": f.location, "indicator": f.indicator, "excerpt": f.excerpt}
+                    for f in findings
+                ],
+            }
+        )
 
     def add(self, scenario: Scenario, summary: Any) -> None:
         """Record every trial in a TrialSummary run against `scenario`."""
@@ -46,7 +61,7 @@ class Report:
                     "served_descriptions": {
                         t["name"]: t.get("description", "")
                         for t in run.trace.listed_tools
-                        if t["name"] in scenario.description_overrides
+                        if scenario.server_command or t["name"] in scenario.description_overrides
                     },
                     "trace": [
                         {"span_id": c.span_id, "tool": c.name, "args": c.args, "result": c.result}
@@ -66,6 +81,7 @@ class Report:
             "command": self.command,
             "generated_at": self.generated_at,
             "records": self.records,
+            "audits": self.audits,
         }
 
     def write(self, out_dir: str | Path) -> tuple[Path, Path]:
@@ -176,6 +192,39 @@ def _trial_html(rec: dict[str, Any]) -> str:
     return "".join(out)
 
 
+def _audit_html(audit: dict[str, Any]) -> list[str]:
+    by_tool: dict[str, list[dict[str, Any]]] = {}
+    for f in audit["findings"]:
+        by_tool.setdefault(f["tool"], []).append(f)
+    out = [
+        f'<h2>Server audit: {escape(audit["server"])}</h2>',
+        f'<p class="muted"><code>{escape(" ".join(audit["command"]))}</code> · '
+        f'{len(audit["tools"])} tools · {len(audit["findings"])} metadata indicator(s). '
+        "Indicators are heuristic; the live canary test below is the evidence.</p>",
+        '<div class="table-wrap"><table><tr><th>tool</th><th>indicators</th></tr>',
+    ]
+    for tool in audit["tools"]:
+        hits = by_tool.get(tool["name"], [])
+        cls = "rsome" if hits else "r0"
+        out.append(
+            f'<tr><td><code>{escape(tool["name"])}</code></td>'
+            f'<td class="{cls}">{escape(", ".join(sorted({h["indicator"] for h in hits})) or "none")}</td></tr>'
+        )
+    out.append("</table></div>")
+    for tool in audit["tools"]:
+        hits = by_tool.get(tool["name"], [])
+        if not hits:
+            continue
+        out.append(f'<details open><summary><code>{escape(tool["name"])}</code></summary><div>')
+        out += [
+            f'<p class="finding">{escape(h["indicator"])} <span class="muted">({escape(h["location"])})</span></p>'
+            f'<pre>{escape(h["excerpt"])}</pre>'
+            for h in hits
+        ]
+        out.append(f'<p class="muted">Full description:</p><pre>{escape(tool["description"])}</pre></div></details>')
+    return out
+
+
 def render_html(data: dict[str, Any]) -> str:
     records = data["records"]
     scenarios = list(dict.fromkeys(r["scenario"] for r in records))
@@ -196,6 +245,9 @@ def render_html(data: dict[str, Any]) -> str:
         '<p class="muted">Verdicts are deterministic checks over the recorded tool-call trace — '
         "what the agent did, not what it said. Click a cell to jump to its trials.</p>",
     ]
+
+    for audit in data.get("audits", []):
+        body += _audit_html(audit)
 
     for sid in scenarios:
         recs = [r for r in records if r["scenario"] == sid]

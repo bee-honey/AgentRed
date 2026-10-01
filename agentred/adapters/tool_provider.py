@@ -70,9 +70,9 @@ class MCPToolProvider:
     subprocess is always cleaned up.
     """
 
-    def __init__(self, command: list[str], cwd: str | None = None) -> None:
+    def __init__(self, command: list[str], cwd: str | None = None, **client_options: Any) -> None:
         self.trace = Trace()
-        self._client = MCPClient(command, cwd=cwd)
+        self._client = MCPClient(command, cwd=cwd, **client_options)
         self._proxy = RecordingProxy(self._client, self.trace)
         self._client.start()
 

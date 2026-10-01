@@ -47,6 +47,10 @@ TOOLS_SERVER = str(_REPO_ROOT / "targets" / "mcp_servers" / "tools_server.py")
 
 def make_provider(transport: str, scenario: Scenario) -> ToolProvider:
     """Build a fresh ToolProvider offering the scenario's tools."""
+    if scenario.server_command:  # a third-party server: always over MCP, never trusted
+        from .scan import untrusted_server_provider  # noqa: PLC0415
+
+        return untrusted_server_provider(scenario.server_command)
     if transport == "mcp":
         cmd = [sys.executable, TOOLS_SERVER, *scenario.tools]
         for tool, description in scenario.description_overrides.items():
@@ -320,6 +324,12 @@ def _run_one_scenario(
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["scan"]:
+        from .scan import scan_main  # noqa: PLC0415
+
+        return scan_main(argv[1:])
+
     parser = argparse.ArgumentParser(description="Run AgentRed scenarios.")
     parser.add_argument("--backend", choices=["scripted", "anthropic", "openai"], default="scripted")
     parser.add_argument("--model", default=None, help="override the backend's default model id")

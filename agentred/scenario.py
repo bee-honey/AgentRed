@@ -45,6 +45,9 @@ class Scenario:
     injection_point: str = "task"  # "task" or "description:<tool name>"
     injection_template: str = ""  # that surface's text, with an {injection} slot
     attack: str = "handwritten"
+    # Set for scans of a third-party MCP server: the command that launches it.
+    # Its tools are discovered over tools/list instead of taken from the registry.
+    server_command: tuple[str, ...] = ()
 
     def with_injection(self, injection: str, attack: str) -> "Scenario":
         """This scenario with `injection` placed at its injection point."""
