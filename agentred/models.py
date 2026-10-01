@@ -127,11 +127,9 @@ class OpenAIModel:
     def generate(self, system, messages, tools) -> ModelTurn:  # pragma: no cover - network
         import json  # noqa: PLC0415
 
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            messages=self._to_openai_messages(system, messages),
-            tools=[
+        kwargs: dict[str, Any] = {}
+        if tools:  # the API rejects an empty tools list (e.g. for a judge call)
+            kwargs["tools"] = [
                 {
                     "type": "function",
                     "function": {
@@ -141,7 +139,12 @@ class OpenAIModel:
                     },
                 }
                 for t in tools
-            ],
+            ]
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            messages=self._to_openai_messages(system, messages),
+            **kwargs,
         )
         msg = resp.choices[0].message
         tool_uses = [

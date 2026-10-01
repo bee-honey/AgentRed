@@ -339,6 +339,10 @@ def main(argv: list[str] | None = None) -> int:
         from .scan import scan_main  # noqa: PLC0415
 
         return scan_main(argv[1:])
+    if argv[:1] == ["judge-eval"]:
+        from .llm_judge import judge_eval_main  # noqa: PLC0415
+
+        return judge_eval_main(argv[1:])
 
     parser = argparse.ArgumentParser(description="Run AgentRed scenarios.")
     parser.add_argument("--backend", choices=["scripted", "anthropic", "openai"], default="scripted")

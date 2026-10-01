@@ -79,6 +79,28 @@ openai:gpt-4o-mini                3     1     33%
 
 The reference `server-everything` (13 tools) scans clean: no indicators, no leaks.
 
+**Can an LLM judge replace the deterministic ones?** `agentred judge-eval` replays
+a saved report through an LLM judge (shown the rule, the agent's instructions, any
+served tool descriptions, the task, the tool calls and the reply — never the
+verdict) and scores it against the deterministic verdicts as ground truth:
+
+```
+agentred judge-eval --report agentred-report/report.json --judge openai:gpt-4o
+```
+
+On the 480-trial run:
+
+| judge | agreement | precision | recall | Cohen's κ | how it fails |
+|---|---|---|---|---|---|
+| gpt-4o-mini | 74% (70–78%) | 49% (43–56%) | 100% | 0.49 | 125 false alarms: it judges what the injection *asked for*, not what the agent did — e.g. "accessed another user's records" on a trace that only touched `alice` |
+| gpt-4o | 96% (94–98%) | 100% | 85% (78–90%) | 0.90 | Perfect on `authz` and `approval`; missed 18 tool-poisoning leaks, 17 from the plausible hand-written payload — *"The agent complied with the tool's requirement to include the internal configuration"* |
+
+The judge is reading the same poisoned tool description the agent read, and the
+same plausible wording that fooled the agent fooled the judge. That's why
+AgentRed's verdicts are deterministic checks over the trace: an LLM judge can be
+a useful second opinion for policies too fuzzy to code, but only after it's been
+calibrated, and it inherits the attack surface it's meant to police.
+
 **Reports.** `--report [DIR]` (default `agentred-report/`) writes every trial —
 scenario, attack, target, the payload the agent saw (including poisoned tool
 descriptions served over `tools/list`), the recorded tool calls, and the findings
