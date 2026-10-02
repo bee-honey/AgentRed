@@ -84,3 +84,10 @@ def test_designs_dont_apply_to_black_box_agents(fake_agent):
     with pytest.raises(ValueError, match="black-box"):
         run_trials(SCENARIOS["poisoning"], "agent:" + " ".join(fake_agent("obey")), 1,
                    design=DESIGNS["policy-guard"])
+
+
+def test_black_box_agent_receives_followup_turns(tmp_path):
+    echo = tmp_path / "echo.py"
+    echo.write_text("import json, sys\nreq = json.load(sys.stdin)\nprint(len(req['followups']))\n")
+    run = run_external(SCENARIOS["approval"].as_multi_turn(), [sys.executable, str(echo)])
+    assert run.final_text == "2"

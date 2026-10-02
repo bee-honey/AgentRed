@@ -42,17 +42,32 @@ class TargetAgent:
         self.tools: ToolProvider = tools or InProcessToolProvider()
         self.max_steps = max_steps
 
-    def run(self, task: str) -> AgentRun:
-        schemas = self.tools.tool_schemas()
-        messages: list[dict[str, Any]] = [{"role": "user", "content": task}]
-        final_text = ""
+    def run(self, task: str, followups: tuple[str, ...] | list[str] = ()) -> AgentRun:
+        """Run the task, then each follow-up user turn in the same conversation.
 
+        Every user turn gets up to `max_steps` model calls. The final text joins
+        the agent's reply to every turn, so checks over the reply see the whole
+        conversation rather than only its last message.
+        """
+        schemas = self.tools.tool_schemas()
+        messages: list[dict[str, Any]] = []
+        replies: list[str] = []
+        steps = 0
+        for user_turn in (task, *followups):
+            messages.append({"role": "user", "content": user_turn})
+            reply, used = self._respond(messages, schemas)
+            steps += used
+            replies.append(reply)
+            messages.append({"role": "assistant", "content": reply or "(no reply)"})
+        return AgentRun(trace=self.tools.trace, final_text="\n\n".join(r for r in replies if r), steps=steps)
+
+    def _respond(self, messages: list[dict[str, Any]], schemas: list[dict[str, Any]]) -> tuple[str, int]:
+        """Model/tool loop for one user turn; returns the reply and steps used."""
         for step in range(1, self.max_steps + 1):
             turn = self.model.generate(self.system_prompt, messages, schemas)
 
             if not turn.wants_tools:
-                final_text = turn.text or ""
-                return AgentRun(trace=self.tools.trace, final_text=final_text, steps=step)
+                return turn.text or "", step
 
             # Record the assistant turn (text + tool_use blocks) in history.
             assistant_content: list[dict[str, Any]] = []
@@ -73,4 +88,4 @@ class TargetAgent:
                 )
             messages.append({"role": "user", "content": tool_results})
 
-        return AgentRun(trace=self.tools.trace, final_text=final_text, steps=self.max_steps)
+        return "", self.max_steps

@@ -36,7 +36,22 @@ class Attack:
 
 
 def builtin_corpora() -> list[str]:
-    return sorted(p.stem for p in CORPORA_DIR.glob("*.json"))
+    return sorted(p.stem for p in CORPORA_DIR.glob("*.json")) + [MULTITURN.id]
+
+
+# Not a template: replays each scenario's multi-turn script (Scenario.multi_turn).
+MULTITURN = Attack("multiturn", "AgentRed multi-turn scripts", "{goal}")
+
+
+def load_attacks(spec: str) -> list[Attack]:
+    """Comma-separated corpora, e.g. "agentdojo,persuasion,multiturn" or a JSON path."""
+    attacks: list[Attack] = []
+    for name in (part.strip() for part in spec.split(",")):
+        if name == MULTITURN.id:
+            attacks.append(MULTITURN)
+        elif name:
+            attacks += load_corpus(name)
+    return attacks
 
 
 def load_corpus(name_or_path: str) -> list[Attack]:
@@ -53,13 +68,20 @@ def load_corpus(name_or_path: str) -> list[Attack]:
     return [Attack(a["id"], source, a["template"]) for a in data["attacks"]]
 
 
-def apply_attack(scenario: Scenario, attack: Attack) -> Scenario:
-    """The scenario with this attack's payload at its injection point."""
+def apply_attack(scenario: Scenario, attack: Attack) -> Scenario | None:
+    """The scenario with this attack's payload at its injection point.
+
+    The multi-turn attack replays the scenario's own conversation script, and is
+    skipped (None) for scenarios that don't define one.
+    """
+    if attack.id == MULTITURN.id:
+        return scenario.as_multi_turn() if scenario.multi_turn else None
     if not scenario.injection_goal:
         raise ValueError(f"scenario {scenario.id!r} declares no injection_goal")
     return scenario.with_injection(attack.render(scenario.injection_goal), attack.id)
 
 
 def scenario_variants(scenario: Scenario, attacks: list[Attack]) -> list[Scenario]:
-    """The hand-written scenario followed by one variant per corpus attack."""
-    return [scenario, *(apply_attack(scenario, a) for a in attacks)]
+    """The hand-written scenario followed by one variant per applicable attack."""
+    variants = (apply_attack(scenario, a) for a in attacks)
+    return [scenario, *(v for v in variants if v is not None)]

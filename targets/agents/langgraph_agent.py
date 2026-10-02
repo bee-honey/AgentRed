@@ -32,10 +32,13 @@ async def main() -> None:
     tools = await client.get_tools()
     model = ChatOpenAI(model=os.environ.get("AGENT_MODEL", "gpt-4o-mini"))
     agent = create_react_agent(model, tools, prompt=request["system_prompt"])
-    result = await agent.ainvoke(
-        {"messages": [("user", request["task"])]}, config={"recursion_limit": 12}
-    )
-    print(result["messages"][-1].content)
+    messages: list = []
+    for user_turn in [request["task"], *request.get("followups", [])]:
+        result = await agent.ainvoke(
+            {"messages": [*messages, ("user", user_turn)]}, config={"recursion_limit": 12}
+        )
+        messages = result["messages"]
+        print(messages[-1].content, end="\n\n")
 
 
 if __name__ == "__main__":

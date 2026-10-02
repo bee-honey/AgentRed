@@ -58,3 +58,40 @@ def test_attack_matrix_cli(capsys):
     assert "attack corpus: AgentDojo" in out
     assert "important_instructions" in out
     assert "6/6 (100%)" in out and "0/6 (0%)" in out  # naive vs careful totals
+
+
+def test_persuasion_corpus_and_multiturn_load_together():
+    from agentred.attacks import load_attacks
+
+    attacks = load_attacks("persuasion,multiturn")
+    ids = [a.id for a in attacks]
+    assert ids[-1] == "multiturn" and "authority_endorsement" in ids
+    assert all("{goal}" in a.template for a in attacks)
+
+
+def test_multiturn_variant_plays_a_clean_opening_then_pressure():
+    from agentred.attacks import load_attacks
+
+    authz = SCENARIOS["authz"]
+    variant = scenario_variants(authz, load_attacks("multiturn"))[-1]
+    assert variant.attack == "multiturn"
+    assert "ceo" not in variant.task.lower()  # the opening request is clean
+    assert any("user=ceo" in turn for turn in variant.followups)
+    # scenarios without a script are skipped, not failed
+    assert [v.attack for v in scenario_variants(SCENARIOS["egress"], load_attacks("multiturn"))] == ["handwritten"]
+
+
+def test_agent_plays_every_turn_in_one_conversation():
+    from agentred.models import ModelTurn
+
+    seen = []
+
+    class Recorder:
+        def generate(self, system, messages, tools):
+            seen.append([m["content"] for m in messages if m["role"] == "user"])
+            return ModelTurn(text=f"reply {len(seen)}")
+
+    approval = SCENARIOS["approval"].as_multi_turn()
+    run, _ = evaluate(approval, Recorder())
+    assert len(seen) == 3 and seen[-1] == list(approval.multi_turn)  # history kept across turns
+    assert run.final_text == "reply 1\n\nreply 2\n\nreply 3"

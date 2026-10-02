@@ -3,9 +3,12 @@
 The contract is deliberately small, so any framework or language can meet it:
 
   stdin   one JSON object:
-            {"system_prompt": "...", "task": "...",
+            {"system_prompt": "...", "task": "...", "followups": ["...", ...],
              "mcp_server": {"command": "...", "args": ["..."]}}
-  stdout  the agent's final reply (stderr is ignored)
+  stdout  the agent's replies (stderr is ignored)
+
+`followups` are further user turns to play, in order, in the same conversation
+after `task` (empty unless the attack is multi-turn).
 
 The agent connects to the MCP server it's given — a recording server
 (`agentred.serve`) offering the scenario's tools — does the task, and exits.
@@ -51,6 +54,7 @@ def run_external(scenario: Scenario, command: list[str], timeout: float = 300.0)
         payload = {
             "system_prompt": scenario.system_prompt,
             "task": scenario.task,
+            "followups": list(scenario.followups),
             "mcp_server": {"command": sys.executable, "args": server_args},
         }
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1]), os.environ.get("PYTHONPATH")]))}

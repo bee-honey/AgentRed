@@ -39,7 +39,7 @@ from pathlib import Path
 
 from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
 from .agent import AgentRun, TargetAgent
-from .attacks import builtin_corpora, load_corpus, scenario_variants
+from .attacks import builtin_corpora, load_attacks, scenario_variants
 from .designs import DESIGNS, AgentDesign
 from .external import agent_label, run_external
 from .env import load_dotenv
@@ -116,7 +116,7 @@ def evaluate(
     if design is not None:
         agent_scenario, provider = design.apply(scenario, provider)
     agent = TargetAgent(model=model, system_prompt=agent_scenario.system_prompt, tools=provider)
-    run = agent.run(scenario.task)
+    run = agent.run(scenario.task, scenario.followups)
     verdict = evaluate_scenario(run.trace, scenario)
     return run, verdict
 
@@ -344,7 +344,7 @@ def _run_design_comparison(scenario: Scenario, args: argparse.Namespace, report:
     if len(targets) != 1 and not (args.backend == "scripted" and args.compare is None):
         raise SystemExit("--designs holds the model fixed: pass one --backend/--model, not --compare")
     spec = targets[0] if len(targets) == 1 else "scripted:naive"
-    variants = scenario_variants(scenario, load_corpus(args.attacks)) if args.attacks else [scenario]
+    variants = scenario_variants(scenario, load_attacks(args.attacks)) if args.attacks else [scenario]
     summaries = []
     for design in _design_list(args.designs):
         merged = TrialSummary(label=design.id, design=design.id)
@@ -371,7 +371,7 @@ def _targets(args: argparse.Namespace) -> list[str]:
 
 
 def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace, report: Report | None) -> int:
-    attacks = load_corpus(args.attacks)
+    attacks = load_attacks(args.attacks)
     variants = scenario_variants(scenario, attacks)
     targets, skipped = _targets(args), {}
     rows: dict[str, dict[str, TrialSummary]] = {v.attack: {} for v in variants}
@@ -384,7 +384,8 @@ def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace, report: Rep
         except (RuntimeError, ValueError) as e:
             skipped[spec] = str(e)
     ran = [t for t in targets if t not in skipped]
-    print(format_attack_matrix(scenario, attacks[0].source, rows, ran, skipped))
+    sources = " + ".join(dict.fromkeys(a.source for a in attacks))
+    print(format_attack_matrix(scenario, sources, rows, ran, skipped))
     return 0
 
 
@@ -480,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--attacks", default=None, metavar="CORPUS",
-        help=f"run every attack template in a corpus ({', '.join(builtin_corpora())} or a JSON path)",
+        help=f"attack sets to run, comma-separated ({', '.join(builtin_corpora())}, or a JSON path)",
     )
     parser.add_argument(
         "--agent", default=None, metavar="CMD",
