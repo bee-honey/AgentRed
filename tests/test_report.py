@@ -35,3 +35,19 @@ def test_no_report_unless_asked(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     main(["--scenario", "authz"])
     assert not (tmp_path / "agentred-report").exists()
+
+
+def test_design_report_shows_blocked_and_task_rows_and_can_trim_quiet_trials(tmp_path):
+    from agentred.report import render_html
+
+    out = tmp_path / "rep"
+    main(["--scenario", "authz", "--designs", "prompt-only,guard-only", "--trials", "2", "--report", str(out)])
+    data = json.loads((out / "report.json").read_text())
+    full = render_html(data)
+    assert "attempts blocked" in full and "task done" in full
+    assert "2 blocked" not in full and "1 blocked" in full  # naive agent: one ceo call blocked
+    # notable_only keeps every trial here (all violated or were blocked), so add a quiet one
+    data["records"].append({**data["records"][0], "passed": True, "findings": [], "trial": 9,
+                            "trace": [], "task_done": True})
+    trimmed = render_html(data, notable_only=True, intro="<p>INTRO</p>")
+    assert "INTRO" in trimmed and "1 other trial(s)" in trimmed

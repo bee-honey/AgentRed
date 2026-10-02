@@ -22,7 +22,7 @@ from typing import Any
 from . import __version__
 from .scenario import Scenario
 from .stats import format_ci, pairwise_lines, wilson_interval
-from .utility import task_done_for_trace
+from .utility import task_done_for_record, task_done_for_trace
 
 
 @dataclass
@@ -158,6 +158,8 @@ details > div { padding: 0 12px 12px; }
 .span.violation { border-left-color: var(--fail); }
 .span.blocked { border-left-color: var(--pass); }
 .badge.block { background: var(--pass-bg); color: var(--pass); margin-left: 6px; }
+.badge.undone { background: var(--warn-bg); color: var(--fg); margin-left: 6px; }
+.quiet { margin: 4px 0 12px; font-size: 13px; }
 .finding { color: var(--fail); font-weight: 600; }
 tr.total td { font-weight: 600; }
 tr.ci td { color: var(--muted); font-size: 13px; }
@@ -192,13 +194,36 @@ def _anchor(*parts: str) -> str:
     return "g-" + "-".join("".join(ch if ch.isalnum() else "_" for ch in p) for p in parts)
 
 
+def _task_done(rec: dict[str, Any]) -> bool | None:
+    """The record's task-completion verdict (recomputed for reports that predate it)."""
+    if "task_done" in rec:
+        return rec["task_done"]
+    from .scenario import SCENARIOS  # noqa: PLC0415
+
+    scenario = SCENARIOS.get(rec["scenario"])
+    return task_done_for_record(rec, scenario) if scenario else None
+
+
+def _blocked(rec: dict[str, Any]) -> int:
+    return sum(1 for c in rec["trace"] if c.get("blocked"))
+
+
+def _notable(rec: dict[str, Any]) -> bool:
+    """Worth a full trace: a violation, a blocked attempt, or an unfinished task."""
+    return not rec["passed"] or _blocked(rec) > 0 or _task_done(rec) is False
+
+
 def _trial_html(rec: dict[str, Any]) -> str:
     bad = {f["span_id"]: f for f in rec["findings"]}
     status = "fail" if not rec["passed"] else "pass"
     label = "FAIL" if not rec["passed"] else "PASS"
+    blocked = _blocked(rec)
+    extra = (f' <span class="badge block">{blocked} blocked</span>' if blocked else "") + (
+        ' <span class="badge undone">task not done</span>' if _task_done(rec) is False else ""
+    )
     out = [
         f'<details{" open" if not rec["passed"] else ""}><summary>'
-        f'<span class="badge {status}">{label}</span>trial {rec["trial"]} '
+        f'<span class="badge {status}">{label}</span>trial {rec["trial"]}{extra} '
         f'<span class="muted">· {len(rec["trace"])} tool call(s)</span></summary><div>'
     ]
     if not rec["trace"]:
@@ -258,7 +283,10 @@ def _audit_html(audit: dict[str, Any]) -> list[str]:
     return out
 
 
-def render_html(data: dict[str, Any]) -> str:
+def render_html(data: dict[str, Any], notable_only: bool = False, intro: str = "") -> str:
+    """The report page. `notable_only` keeps full traces only for trials with a
+    violation, a blocked attempt or an unfinished task; `intro` is optional HTML
+    placed under the header."""
     records = data["records"]
     scenarios = list(dict.fromkeys(r["scenario"] for r in records))
     total = len(records)
@@ -277,6 +305,7 @@ def render_html(data: dict[str, Any]) -> str:
         "</div>",
         '<p class="muted">Verdicts are deterministic checks over the recorded tool-call trace — '
         "what the agent did, not what it said. Click a cell to jump to its trials.</p>",
+        intro,
     ]
 
     for audit in data.get("audits", []):
@@ -320,8 +349,28 @@ def render_html(data: dict[str, Any]) -> str:
             body.append("</tr>")
         body.append('<tr class="ci"><td>95% CI</td>')
         body += [f'<td class="cell">{_ci_bar(k, n)}</td>' for _, k, n in counts]
-        body.append("</tr></table></div>")
-        if pairs := pairwise_lines(counts):
+        body.append("</tr>")
+        by_target = {t: [r for r in recs if r["target"] == t] for t in targets}
+        if any(_blocked(r) for r in recs):
+            body.append('<tr class="ci"><td>attempts blocked</td>')
+            body += [
+                f'<td class="cell">{sum(1 for r in rs if _blocked(r))}/{len(rs)}</td>'
+                for rs in by_target.values()
+            ]
+            body.append("</tr>")
+        done = {t: [d for r in rs if (d := _task_done(r)) is not None] for t, rs in by_target.items()}
+        if any(done.values()):
+            body.append('<tr class="ci"><td>task done</td>')
+            body += [
+                f'<td class="cell">{sum(ds)}/{len(ds)}</td>' if ds else '<td class="cell">—</td>'
+                for ds in done.values()
+            ]
+            body.append("</tr>")
+        body.append("</table></div>")
+        from .designs import DESIGNS  # noqa: PLC0415
+
+        designs_run = all(t in DESIGNS for t in targets)  # compare each design to the baseline
+        if pairs := pairwise_lines(counts, baseline_only=designs_run):
             body.append('<p class="muted">' + "<br>".join(escape(p.strip()) for p in pairs) + "</p>")
 
         for a in attacks:
@@ -344,7 +393,13 @@ def render_html(data: dict[str, Any]) -> str:
                     f'<p id="{_anchor(sid, a, t)}"><b>{escape(t)}</b> '
                     f'<span class="muted">· {viol}/{len(cell)} violated</span></p>'
                 )
-                body += [_trial_html(r) for r in cell]
+                shown = [r for r in cell if _notable(r)] if notable_only else cell
+                body += [_trial_html(r) for r in shown]
+                if quiet := len(cell) - len(shown):
+                    body.append(
+                        f'<p class="muted quiet">{quiet} other trial(s): no violation, nothing '
+                        "blocked, task done.</p>"
+                    )
 
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'

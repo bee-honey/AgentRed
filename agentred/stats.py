@@ -60,12 +60,15 @@ def format_p(p: float) -> str:
     return "p<0.001" if p < 0.001 else f"p={p:.3f}"
 
 
-def pairwise_lines(counts: list[tuple[str, int, int]]) -> list[str]:
-    """Fisher's exact test between every pair of real (non-scripted) targets."""
+def pairwise_lines(counts: list[tuple[str, int, int]], baseline_only: bool = False) -> list[str]:
+    """Fisher's exact test between real (non-scripted) targets: every pair, or
+    each against the first (the baseline) when `baseline_only`."""
     real = [c for c in counts if not c[0].startswith("scripted:") and c[2]]
     lines = []
     for i, (a, ka, na) in enumerate(real):
         for b, kb, nb in real[i + 1 :]:
+            if baseline_only and i > 0:
+                break
             p = fisher_exact(ka, na, kb, nb)
             verdict = "differ" if p < 0.05 else "no significant difference"
             lines.append(f"  {a} vs {b}: {format_p(p)} — {verdict} (Fisher's exact, two-sided)")
