@@ -487,6 +487,10 @@ def main(argv: list[str] | None = None) -> int:
         from .scan import scan_main  # noqa: PLC0415
 
         return scan_main(argv[1:])
+    if argv[:1] == ["gate"]:
+        from .gate import gate_main  # noqa: PLC0415
+
+        return gate_main(argv[1:])
     if argv[:1] == ["rescore"]:
         from .utility import rescore_main  # noqa: PLC0415
 

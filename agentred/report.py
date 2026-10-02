@@ -93,11 +93,17 @@ class Report:
         }
 
     def write(self, out_dir: str | Path) -> tuple[Path, Path]:
+        from .sarif import report_to_sarif  # noqa: PLC0415
+
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
+        data = self.to_dict()
         json_path, html_path = out / "report.json", out / "report.html"
-        json_path.write_text(json.dumps(self.to_dict(), indent=2, default=str), encoding="utf-8")
-        html_path.write_text(render_html(self.to_dict()), encoding="utf-8")
+        json_path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        html_path.write_text(render_html(data), encoding="utf-8")
+        (out / "report.sarif").write_text(
+            json.dumps(report_to_sarif(data), indent=2), encoding="utf-8"
+        )
         return json_path, html_path
 
 

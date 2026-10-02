@@ -1,5 +1,7 @@
 # AgentRed
 
+[![CI](https://github.com/bee-honey/AgentRed/actions/workflows/ci.yml/badge.svg)](https://github.com/bee-honey/AgentRed/actions/workflows/ci.yml)
+
 **AgentRed is a security evaluation framework for AI agents. It executes adversarial scenarios, observes agent and tool behavior, and evaluates whether security invariants are violated.**
 
 It's built to answer *"is this agent's design secure, and which engineering controls actually prevent the attack?"*, not just *"which model resists attacks better?"* An agent is more than its model: it's the system prompt, the tools it trusts, and whatever policy is (or isn't) enforced in code around them. AgentRed records every tool call at the MCP boundary and judges **what the agent did**, not what it said. The same harness compares agent designs, tests agents built in other frameworks as black boxes, audits third-party MCP servers, and compares models.
@@ -65,7 +67,7 @@ agentred --scenario approval --adaptive --designs all --backend openai --model g
 agentred scan --server "npx -y @modelcontextprotocol/server-everything" --backend openai
 ```
 
-Add `--report` to any run for `agentred-report/report.json` and a self-contained `report.html`, with a violation matrix per scenario, confidence intervals, and every trace with its violating span highlighted.
+Add `--report` to any run for `agentred-report/report.json`, a self-contained `report.html` (violation matrix per scenario, confidence intervals, every trace with its violating span highlighted), and `report.sarif` (SARIF 2.1.0, one result per violation) for code-scanning tools.
 
 ## Results
 
@@ -230,7 +232,8 @@ The judge reads the same poisoned description the agent read, and the same plaus
 - **Canary secrets.** Each secret is a uniquely tagged fake (`AR-CANARY-…-DO-NOT-SHARE`), so detecting a leak is an exact string match rather than a judgment call.
 - **Task completion.** Each scenario defines its legitimate outcome, checked from executed calls and the final reply. `agentred rescore` recomputes it from saved reports.
 - **Statistics.** Rates carry 95% Wilson score intervals, which stay meaningful at 0/n and n/n. Comparisons use two-sided Fisher's exact tests, which are valid at small counts. An early 3-trial run looked decisive (3/3 vs 0/3) but was only p = 0.10; the same gap at 10 trials is p < 0.001.
-- **Reproducibility.** Every run can write `report.json` with each trial's payload, served tool descriptions, trace, findings and reply. The offline `scripted` backend runs the whole pipeline with no API key, and the test suite (88 tests) runs offline.
+- **Reproducibility.** Every run can write `report.json` with each trial's payload, served tool descriptions, trace, findings and reply, plus `report.sarif`. The offline `scripted` backend runs the whole pipeline with no API key, and the test suite runs offline.
+- **Regression testing in CI.** `agentred gate` compares a run to a committed baseline and fails if any design upholds its invariants less often. The [CI workflow](.github/workflows/ci.yml) runs the offline scenarios across all designs on every push — deterministic and keyless — so a change that weakens a control (say, the policy guard stops blocking) fails the build. The baseline (`agentred-baseline.json`) uses the worst-case scripted agent, so the prompt-dependent designs violate by construction and the gate's real job is to keep the code-enforced designs (`policy-guard`, `guard-only`) at zero.
 
 ### Limitations
 
@@ -256,6 +259,7 @@ The judge reads the same poisoned description the agent read, and the same plaus
 | `--report [DIR]` | write `report.json` + `report.html` |
 | `agentred scan --server "CMD"` | audit and live-test a third-party MCP server |
 | `agentred rescore REPORT…` | recompute violations, blocked attempts and task completion offline |
+| `agentred gate --baseline B.json CUR.json` | fail (exit 1) if any design upholds its invariants less often than the baseline |
 | `agentred judge-eval --report R --judge M` | calibrate an LLM judge against deterministic verdicts |
 
 ## Repository layout
@@ -280,6 +284,8 @@ agentred/
   scan.py            third-party MCP server audit + live canary test
   llm_judge.py       LLM judge and its calibration (`judge-eval`)
   stats.py           Wilson intervals, Fisher's exact test
+  sarif.py           SARIF 2.1.0 output for code-scanning / CI
+  gate.py            regression gate: fail CI when a design regresses vs a baseline
   report.py          JSON + self-contained HTML reports
   run.py             CLI
 targets/

@@ -1,0 +1,49 @@
+name: AgentRed CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  security-gate:
+    # Regression testing for agent security. Runs the offline, scripted scenarios
+    # (deterministic, no API key) and fails the build if any agent design upholds
+    # its invariants less often than the committed baseline.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # to upload SARIF to the Security tab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+
+      - name: Run offline scenarios across agent designs
+        run: agentred --designs all --report agentred-report/ci
+
+      - name: Upload findings (SARIF) to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true   # ok if code scanning isn't enabled on this repo
+        with:
+          sarif_file: agentred-report/ci/report.sarif
+          category: agentred
+
+      - name: Gate on regressions vs baseline
+        run: agentred gate --baseline agentred-baseline.json agentred-report/ci/report.json
