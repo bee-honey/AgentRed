@@ -34,12 +34,15 @@ class ToolProvider(Protocol):
 
 class InProcessToolProvider:
     def __init__(
-        self, tool_names: tuple[str, ...], description_overrides: dict[str, str] | None = None
+        self,
+        tool_names: tuple[str, ...],
+        description_overrides: dict[str, str] | None = None,
+        retrieved_content: str = "",
     ) -> None:
         self.trace = Trace()
         self._names = tuple(tool_names)
         self._overrides = dict(description_overrides or {})
-        self._tools = InstrumentedTools(self.trace, self._names)
+        self._tools = InstrumentedTools(self.trace, self._names, retrieved_content)
 
     def tool_schemas(self) -> list[dict[str, Any]]:
         schemas = model_schemas(self._names, self._overrides)

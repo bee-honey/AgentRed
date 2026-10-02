@@ -50,6 +50,8 @@ def run_external(scenario: Scenario, command: list[str], timeout: float = 300.0)
         server_args = ["-m", "agentred.serve", "--record", record]
         for tool, description in scenario.description_overrides.items():
             server_args += ["--description", tool, description]
+        if scenario.retrieved_content:
+            server_args += ["--documents", scenario.retrieved_content]
         server_args += list(scenario.tools)
         payload = {
             "system_prompt": scenario.system_prompt,

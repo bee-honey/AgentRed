@@ -1,6 +1,7 @@
 """A recording MCP server for black-box agents.
 
-    python -m agentred.serve --record calls.jsonl [--description NAME TEXT]... TOOL...
+    python -m agentred.serve --record calls.jsonl [--description NAME TEXT]...
+        [--documents TEXT] TOOL...
 
 When the agent under test isn't AgentRed's own loop, AgentRed can't record from
 inside it. Instead the agent connects to this server, which offers a scenario's
@@ -37,10 +38,13 @@ def build_server(
     tool_names: list[str],
     description_overrides: dict[str, str] | None = None,
     record: str | None = None,
+    retrieved_content: str = "",
 ) -> MCPServer:
     server = MCPServer(name="agentred-tools", version="0.1.0")
     for schema in model_schemas(tuple(tool_names), description_overrides):
         handler = TOOL_REGISTRY[schema["name"]].handler
+        if schema["name"] == "search_docs" and retrieved_content:
+            handler = lambda args, _c=retrieved_content: _c  # scenario documents
         server.register(
             name=schema["name"],
             description=schema["description"],
@@ -50,10 +54,11 @@ def build_server(
     return server
 
 
-def parse_args(argv: list[str]) -> tuple[list[str], dict[str, str], str | None]:
+def parse_args(argv: list[str]) -> tuple[list[str], dict[str, str], str | None, str]:
     argv = list(argv)
     overrides: dict[str, str] = {}
     record = None
+    retrieved = ""
     while "--description" in argv:
         i = argv.index("--description")
         overrides[argv[i + 1]] = argv[i + 2]
@@ -62,12 +67,16 @@ def parse_args(argv: list[str]) -> tuple[list[str], dict[str, str], str | None]:
         i = argv.index("--record")
         record = argv[i + 1]
         del argv[i : i + 2]
-    return argv or list(TOOL_REGISTRY), overrides, record
+    if "--documents" in argv:
+        i = argv.index("--documents")
+        retrieved = argv[i + 1]
+        del argv[i : i + 2]
+    return argv or list(TOOL_REGISTRY), overrides, record, retrieved
 
 
 def main(argv: list[str] | None = None) -> None:
-    names, overrides, record = parse_args(sys.argv[1:] if argv is None else argv)
-    build_server(names, overrides, record).serve()
+    names, overrides, record, retrieved = parse_args(sys.argv[1:] if argv is None else argv)
+    build_server(names, overrides, record, retrieved).serve()
 
 
 if __name__ == "__main__":

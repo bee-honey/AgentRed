@@ -33,7 +33,12 @@ def test_every_variant_carries_the_goal_and_keeps_the_judge_working(scenario):
     variants = scenario_variants(scenario, load_corpus("agentdojo"))
     assert variants[0].attack == HANDWRITTEN
     for v in variants[1:]:
-        surface = v.task if v.injection_point == "task" else v.description_overrides["lookup_order"]
+        if v.injection_point == "task":
+            surface = v.task
+        elif v.injection_point == "document":
+            surface = v.retrieved_content
+        else:
+            surface = v.description_overrides["lookup_order"]
         assert scenario.injection_goal in surface
         # The attack payload changes; the invariant and its verdicts do not.
         assert not evaluate(v, build_model("scripted:naive", v))[1].passed

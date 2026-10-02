@@ -66,8 +66,12 @@ def make_provider(transport: str, scenario: Scenario) -> ToolProvider:
         cmd = [sys.executable, TOOLS_SERVER, *scenario.tools]
         for tool, description in scenario.description_overrides.items():
             cmd += ["--description", tool, description]
+        if scenario.retrieved_content:
+            cmd += ["--documents", scenario.retrieved_content]
         return MCPToolProvider(cmd, cwd=str(_REPO_ROOT))
-    return InProcessToolProvider(scenario.tools, scenario.description_overrides)
+    return InProcessToolProvider(
+        scenario.tools, scenario.description_overrides, scenario.retrieved_content
+    )
 
 
 def _scripted_from_calls(
@@ -111,7 +115,9 @@ def evaluate(
     provider: ToolProvider | None = None,
     design: AgentDesign | None = None,
 ) -> tuple[AgentRun, Verdict]:
-    provider = provider or InProcessToolProvider(scenario.tools, scenario.description_overrides)
+    provider = provider or InProcessToolProvider(
+        scenario.tools, scenario.description_overrides, scenario.retrieved_content
+    )
     agent_scenario = scenario
     if design is not None:
         agent_scenario, provider = design.apply(scenario, provider)
