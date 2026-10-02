@@ -1,8 +1,7 @@
-"""AgentRed — a trace-grounded safety-evaluation harness for AI agents.
+"""AgentRed — a security evaluation framework for AI agents.
 
-v0.1 is a single end-to-end vertical slice:
-  one target agent, one instrumented tool, one attack scenario,
-  one security invariant, one deterministic PASS/FAIL evaluator.
+It executes adversarial scenarios, observes agent and tool behavior at the MCP
+boundary, and evaluates whether security invariants are violated. See README.md.
 """
 
 __version__ = "0.1.0"
