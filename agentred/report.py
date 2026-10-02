@@ -22,6 +22,7 @@ from typing import Any
 from . import __version__
 from .scenario import Scenario
 from .stats import format_ci, pairwise_lines, wilson_interval
+from .utility import task_done_for_trace
 
 
 @dataclass
@@ -59,6 +60,7 @@ class Report:
                     "design": getattr(summary, "design", "prompt-only"),
                     "trial": trial,
                     "passed": verdict.passed,
+                    "task_done": task_done_for_trace(run.trace, run.final_text, scenario),
                     "task": scenario.task,
                     "served_descriptions": {
                         t["name"]: t.get("description", "")

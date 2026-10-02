@@ -10,7 +10,8 @@ dependencies = []  # v0.1 core is stdlib-only
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.40"]
 dev = ["pytest>=8"]
-demo = ["mcp>=2"]  # only for targets/mcp_servers/third_party_notes.py
+demo = ["mcp>=1.2"]  # only for targets/mcp_servers/third_party_notes.py (SDK 1.x or 2.x)
+langgraph = ["langgraph>=1.0", "langchain-openai>=1.0", "langchain-mcp-adapters>=0.3"]  # targets/agents/langgraph_agent.py
 
 [project.scripts]
 agentred = "agentred.run:main"

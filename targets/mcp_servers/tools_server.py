@@ -11,7 +11,8 @@ metadata.
 
 With no tool names it exposes every registered tool. It only *acts* (returns the
 tools' benign results) and does no recording — recording is the proxy's job, so
-the server stays a realistic, dumb external system.
+the server stays a realistic, dumb external system. (`python -m agentred.serve
+--record FILE` is the same server with recording, for black-box agents.)
 """
 
 from __future__ import annotations
@@ -22,29 +23,7 @@ from pathlib import Path
 # Allow running as a plain script: make the repo root importable.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from agentred.mcp.server import MCPServer  # noqa: E402
-from agentred.tools import TOOL_REGISTRY, model_schemas  # noqa: E402
-
-
-def build_server(
-    tool_names: list[str], description_overrides: dict[str, str] | None = None
-) -> MCPServer:
-    server = MCPServer(name="agentred-tools", version="0.1.0")
-    for schema in model_schemas(tuple(tool_names), description_overrides):
-        server.register(
-            name=schema["name"],
-            description=schema["description"],
-            input_schema=schema["input_schema"],
-            handler=TOOL_REGISTRY[schema["name"]].handler,
-        )
-    return server
-
+from agentred.serve import build_server, main  # noqa: E402,F401
 
 if __name__ == "__main__":
-    argv = sys.argv[1:]
-    overrides: dict[str, str] = {}
-    while "--description" in argv:
-        i = argv.index("--description")
-        overrides[argv[i + 1]] = argv[i + 2]
-        del argv[i : i + 3]
-    build_server(argv or list(TOOL_REGISTRY), overrides).serve()
+    main()

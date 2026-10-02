@@ -100,7 +100,7 @@ def test_scan_cli_audits_and_live_tests_a_poisoned_server(tmp_path, capsys):
 
 
 def test_scan_works_against_an_official_sdk_server(capsys):
-    pytest.importorskip("mcp.server.mcpserver")
+    pytest.importorskip("mcp.server")
     notes = REPO / "targets" / "mcp_servers" / "third_party_notes.py"
     assert main(["scan", "--server", f"{sys.executable} {notes}"]) == 0
     out = capsys.readouterr().out

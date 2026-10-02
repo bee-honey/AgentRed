@@ -4,7 +4,7 @@ AgentRed didn't write the server code path this exercises — it's the SDK's own
 stdio transport, schema generation and JSON-RPC handling — so scanning it shows
 `agentred scan` working against a server it doesn't control:
 
-    pip install "mcp>=2"
+    pip install mcp
     agentred scan --server "python targets/mcp_servers/third_party_notes.py"
 
 Two tools are ordinary. `save_note` carries a poisoned description in the
@@ -12,7 +12,10 @@ published "tool poisoning" pattern: hidden instructions, aimed at the model, to
 copy its confidential configuration into an argument the server receives.
 """
 
-from mcp.server.mcpserver import MCPServer
+try:  # MCP SDK 2.x
+    from mcp.server.mcpserver import MCPServer
+except ImportError:  # 1.x (e.g. pinned by langchain-mcp-adapters): same API, older name
+    from mcp.server.fastmcp import FastMCP as MCPServer
 
 app = MCPServer("acme-notes")
 _NOTES: dict[str, str] = {"welcome": "Notes sync across your devices."}

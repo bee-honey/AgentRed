@@ -22,6 +22,9 @@ Options:
   --designs LIST                  hold the model fixed and compare agent designs
                                   (prompt-only, hardened-prompt, pinned-tools,
                                   policy-guard, or "all")
+  --agent "CMD"                   test a black-box agent instead of AgentRed's own loop
+                                  (stdin/stdout contract in agentred/external.py); also
+                                  usable in --compare as "agent:CMD"
   --report [DIR]                  write report.json + report.html (every trial's
                                   trace and findings) to DIR (default: agentred-report)
 """
@@ -29,6 +32,7 @@ Options:
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,12 +41,14 @@ from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
 from .agent import AgentRun, TargetAgent
 from .attacks import builtin_corpora, load_corpus, scenario_variants
 from .designs import DESIGNS, AgentDesign
+from .external import agent_label, run_external
 from .env import load_dotenv
 from .judge import Verdict, evaluate_scenario
 from .models import Model, ModelTurn, ScriptedModel, ToolUse
 from .report import Report
 from .scenario import SCENARIOS, Scenario
 from .stats import fisher_exact, format_ci, format_p, format_rate, pairwise_lines
+from .utility import task_done_for_trace
 
 DEFAULT_COMPARE = ("scripted:naive", "scripted:careful", "openai:gpt-4o", "openai:gpt-4o-mini")
 
@@ -84,7 +90,9 @@ def build_model(spec: str, scenario: Scenario) -> Model:
 
     if backend == "scripted":
         if model_id == "careful":
-            return _scripted_from_calls(scenario.careful_calls, "Handling the request.")
+            return _scripted_from_calls(
+                scenario.careful_calls, "Handling the request.", scenario.careful_reply
+            )
         return _scripted_from_calls(scenario.naive_calls, "Following the attached instructions.")
     if backend == "openai":
         from .models import OpenAIModel  # noqa: PLC0415
@@ -119,6 +127,7 @@ class TrialSummary:
     design: str = "prompt-only"
     runs: list[AgentRun] = field(default_factory=list)
     verdicts: list[Verdict] = field(default_factory=list)
+    done: list[bool | None] = field(default_factory=list)  # legitimate task completed?
 
     @property
     def trials(self) -> int:
@@ -131,6 +140,11 @@ class TrialSummary:
     @property
     def rate(self) -> float:
         return self.violations / self.trials if self.trials else 0.0
+
+    @property
+    def tasks_done(self) -> str:
+        known = [d for d in self.done if d is not None]
+        return f"{sum(known)}/{len(known)}" if known else "—"
 
     @property
     def attempted(self) -> int:
@@ -147,6 +161,20 @@ def run_trials(
     design: AgentDesign | None = None,
     label: str | None = None,
 ) -> TrialSummary:
+    if spec.startswith("agent:"):  # a black-box agent: its own loop, judged at the MCP boundary
+        if design is not None and design.id != "prompt-only":
+            raise ValueError("--designs applies to AgentRed's own agent, not a black-box agent")
+        command = shlex.split(spec.removeprefix("agent:"))
+        summary = TrialSummary(label=label or agent_label(command))
+        for _ in range(trials):
+            run = run_external(scenario, command)
+            summary.runs.append(run)
+            summary.verdicts.append(evaluate_scenario(run.trace, scenario))
+            summary.done.append(task_done_for_trace(run.trace, run.final_text, scenario))
+        if report is not None:
+            report.add(scenario, summary)
+        return summary
+
     summary = TrialSummary(label=label or spec, design=design.id if design else "prompt-only")
     for _ in range(trials):
         model = build_model(spec, scenario)  # fresh model each trial (scripted replays reset)
@@ -157,6 +185,7 @@ def run_trials(
             provider.close()
         summary.runs.append(run)
         summary.verdicts.append(verdict)
+        summary.done.append(task_done_for_trace(run.trace, run.final_text, scenario))
     if report is not None:
         report.add(scenario, summary)
     return summary
@@ -277,8 +306,8 @@ def format_design_table(scenario: Scenario, spec: str, summaries: list[TrialSumm
     base = summaries[0]
     lines = [
         *_header(scenario, f"agent designs on {spec}"),
-        f"{'design':<18}{'violated':>10}{'95% CI':>12}{'blocked':>9}   vs {base.design}",
-        "-" * 64,
+        f"{'design':<18}{'violated':>10}{'95% CI':>12}{'blocked':>9}{'task done':>11}   vs {base.design}",
+        "-" * 74,
     ]
     for s in summaries:
         versus = (
@@ -287,12 +316,14 @@ def format_design_table(scenario: Scenario, spec: str, summaries: list[TrialSumm
         )
         lines.append(
             f"{s.design:<18}{f'{s.violations}/{s.trials}':>10}"
-            f"{format_ci(s.violations, s.trials):>12}{f'{s.attempted}/{s.trials}':>9}   {versus}"
+            f"{format_ci(s.violations, s.trials):>12}{f'{s.attempted}/{s.trials}':>9}"
+            f"{s.tasks_done:>11}   {versus}"
         )
     lines += [
         "",
         "  violated = an executed call broke the invariant; blocked = trials where a",
-        "  control refused at least one call (the model tried, nothing ran)",
+        "  control refused at least one call (the model tried, nothing ran);",
+        "  task done = the user's legitimate request was still completed",
         "=" * 64,
     ]
     return "\n".join(lines)
@@ -321,12 +352,15 @@ def _run_design_comparison(scenario: Scenario, args: argparse.Namespace, report:
             s = run_trials(variant, spec, args.trials, args.transport, report, design, label=design.id)
             merged.runs += s.runs
             merged.verdicts += s.verdicts
+            merged.done += s.done
         summaries.append(merged)
     print(format_design_table(scenario, spec, summaries))
     return 0
 
 
 def _targets(args: argparse.Namespace) -> list[str]:
+    if args.agent:
+        return [f"agent:{args.agent}"]
     if args.compare is not None:
         if args.compare == "__default__":
             return list(DEFAULT_COMPARE)
@@ -378,6 +412,12 @@ def _run_one_scenario(
         print(format_comparison(scenario, summaries, skipped))
         return 0
 
+    # a black-box agent
+    if args.agent:
+        summary = run_trials(scenario, f"agent:{args.agent}", args.trials, report=report)
+        print(format_trials(scenario, summary, args.verbose))
+        return 0 if summary.violations == 0 else 1
+
     # real single backend
     if args.backend in ("anthropic", "openai"):
         spec = f"{args.backend}:{args.model}" if args.model else args.backend
@@ -413,6 +453,10 @@ def main(argv: list[str] | None = None) -> int:
         from .scan import scan_main  # noqa: PLC0415
 
         return scan_main(argv[1:])
+    if argv[:1] == ["rescore"]:
+        from .utility import rescore_main  # noqa: PLC0415
+
+        return rescore_main(argv[1:])
     if argv[:1] == ["judge-eval"]:
         from .llm_judge import judge_eval_main  # noqa: PLC0415
 
@@ -437,6 +481,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--attacks", default=None, metavar="CORPUS",
         help=f"run every attack template in a corpus ({', '.join(builtin_corpora())} or a JSON path)",
+    )
+    parser.add_argument(
+        "--agent", default=None, metavar="CMD",
+        help="test a black-box agent command (see agentred/external.py for the contract)",
     )
     parser.add_argument(
         "--designs", default=None, metavar="LIST",
