@@ -61,6 +61,31 @@ class TargetAgent:
             messages.append({"role": "assistant", "content": reply or "(no reply)"})
         return AgentRun(trace=self.tools.trace, final_text="\n\n".join(r for r in replies if r), steps=steps)
 
+    def converse(self, opening: str, attacker: Any, max_turns: int = 4) -> AgentRun:
+        """Drive a conversation where each user turn comes from `attacker`.
+
+        `attacker.respond(target_reply)` returns the next user message, or None to
+        stop. The opening message is played first; the attacker reacts to each of
+        the target's replies. Tool calls accumulate in one trace, as in `run`.
+        """
+        schemas = self.tools.tool_schemas()
+        messages: list[dict[str, Any]] = []
+        replies: list[str] = []
+        steps = 0
+        user_turn: str | None = opening
+        for _ in range(max_turns):
+            if user_turn is None:
+                break
+            messages.append({"role": "user", "content": user_turn})
+            reply, used = self._respond(messages, schemas)
+            steps += used
+            replies.append(reply)
+            messages.append({"role": "assistant", "content": reply or "(no reply)"})
+            user_turn = attacker.respond(reply)
+        return AgentRun(
+            trace=self.tools.trace, final_text="\n\n".join(r for r in replies if r), steps=steps
+        )
+
     def _respond(self, messages: list[dict[str, Any]], schemas: list[dict[str, Any]]) -> tuple[str, int]:
         """Model/tool loop for one user turn; returns the reply and steps used."""
         for step in range(1, self.max_steps + 1):

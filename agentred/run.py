@@ -34,10 +34,11 @@ from __future__ import annotations
 import argparse
 import shlex
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
+from .adaptive import ModelAttacker, run_adaptive
 from .agent import AgentRun, TargetAgent
 from .attacks import builtin_corpora, load_attacks, scenario_variants
 from .designs import DESIGNS, AgentDesign
@@ -114,6 +115,7 @@ def evaluate(
     model: Model,
     provider: ToolProvider | None = None,
     design: AgentDesign | None = None,
+    attacker: "ModelAttacker | None" = None,
 ) -> tuple[AgentRun, Verdict]:
     provider = provider or InProcessToolProvider(
         scenario.tools, scenario.description_overrides, scenario.retrieved_content
@@ -122,7 +124,10 @@ def evaluate(
     if design is not None:
         agent_scenario, provider = design.apply(scenario, provider)
     agent = TargetAgent(model=model, system_prompt=agent_scenario.system_prompt, tools=provider)
-    run = agent.run(scenario.task, scenario.followups)
+    if attacker is not None:  # adaptive multi-turn conversation
+        run = run_adaptive(scenario, agent, attacker)
+    else:
+        run = agent.run(scenario.task, scenario.followups)
     verdict = evaluate_scenario(run.trace, scenario)
     return run, verdict
 
@@ -166,6 +171,7 @@ def run_trials(
     report: Report | None = None,
     design: AgentDesign | None = None,
     label: str | None = None,
+    attacker_spec: str | None = None,
 ) -> TrialSummary:
     if spec.startswith("agent:"):  # a black-box agent: its own loop, judged at the MCP boundary
         if design is not None and design.id != "prompt-only":
@@ -185,8 +191,12 @@ def run_trials(
     for _ in range(trials):
         model = build_model(spec, scenario)  # fresh model each trial (scripted replays reset)
         provider = make_provider(transport, scenario)  # fresh provider/trace (+ MCP subprocess)
+        attacker = (
+            ModelAttacker(build_model(attacker_spec, scenario), scenario)
+            if attacker_spec else None
+        )
         try:
-            run, verdict = evaluate(scenario, model, provider, design)
+            run, verdict = evaluate(scenario, model, provider, design, attacker)
         finally:
             provider.close()
         summary.runs.append(run)
@@ -350,12 +360,16 @@ def _run_design_comparison(scenario: Scenario, args: argparse.Namespace, report:
     if len(targets) != 1 and not (args.backend == "scripted" and args.compare is None):
         raise SystemExit("--designs holds the model fixed: pass one --backend/--model, not --compare")
     spec = targets[0] if len(targets) == 1 else "scripted:naive"
+    attacker_spec = _attacker_spec(args)
     variants = scenario_variants(scenario, load_attacks(args.attacks)) if args.attacks else [scenario]
     summaries = []
     for design in _design_list(args.designs):
         merged = TrialSummary(label=design.id, design=design.id)
         for variant in variants:
-            s = run_trials(variant, spec, args.trials, args.transport, report, design, label=design.id)
+            s = run_trials(
+                variant, spec, args.trials, args.transport, report, design,
+                label=design.id, attacker_spec=attacker_spec,
+            )
             merged.runs += s.runs
             merged.verdicts += s.verdicts
             merged.done += s.done
@@ -398,9 +412,20 @@ def _run_attack_matrix(scenario: Scenario, args: argparse.Namespace, report: Rep
 # ---------- entrypoint ----------
 
 
+def _attacker_spec(args: argparse.Namespace) -> str | None:
+    """The attacker model spec when --adaptive is set, else None."""
+    if not getattr(args, "adaptive", False):
+        return None
+    return args.attacker or "openai:gpt-4o-mini"
+
+
 def _run_one_scenario(
     scenario: Scenario, args: argparse.Namespace, report: Report | None = None
 ) -> int:
+    if getattr(args, "adaptive", False):
+        if args.attacks or args.agent or args.compare is not None:
+            raise SystemExit("--adaptive runs its own conversation: not with --attacks/--agent/--compare")
+        scenario = replace(scenario, attack="adaptive")
     if args.designs:
         return _run_design_comparison(scenario, args, report)
     if args.attacks:
@@ -428,7 +453,9 @@ def _run_one_scenario(
     # real single backend
     if args.backend in ("anthropic", "openai"):
         spec = f"{args.backend}:{args.model}" if args.model else args.backend
-        summary = run_trials(scenario, spec, args.trials, args.transport, report)
+        summary = run_trials(
+            scenario, spec, args.trials, args.transport, report, attacker_spec=_attacker_spec(args)
+        )
         if args.trials > 1:
             print(format_trials(scenario, summary, args.verbose))
         else:
@@ -492,6 +519,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--agent", default=None, metavar="CMD",
         help="test a black-box agent command (see agentred/external.py for the contract)",
+    )
+    parser.add_argument(
+        "--adaptive", action="store_true",
+        help="drive the conversation with an adaptive attacker model that reacts to replies",
+    )
+    parser.add_argument(
+        "--attacker", default=None, metavar="SPEC",
+        help="attacker model for --adaptive (default openai:gpt-4o-mini)",
     )
     parser.add_argument(
         "--designs", default=None, metavar="LIST",
