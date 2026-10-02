@@ -4,6 +4,13 @@
 
 It's built to answer *"is this agent's design secure, and which engineering controls actually prevent the attack?"*, not just *"which model resists attacks better?"* An agent is more than its model: it's the system prompt, the tools it trusts, and whatever policy is (or isn't) enforced in code around them. AgentRed records every tool call at the MCP boundary and judges **what the agent did**, not what it said. The same harness compares agent designs, tests agents built in other frameworks as black boxes, audits third-party MCP servers, and compares models.
 
+<p align="center">
+  <img src="docs/demo.svg" width="680"
+       alt="AgentRed CLI running the poisoning scenario offline: a naive agent leaks a canary secret through a poisoned tool call (VERDICT: FAIL), a careful agent does not (VERDICT: PASS) — both judged from the recorded tool-call trace.">
+</p>
+
+<sub>The offline demo above needs no API key. Regenerate it with `python scripts/make_demo_svg.py`.</sub>
+
 ## Key findings
 
 From over 1,300 recorded agent runs against OpenAI models (details and caveats in [Results](#results)):
