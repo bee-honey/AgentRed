@@ -26,18 +26,7 @@ From over 1,300 recorded agent runs against OpenAI models (details and caveats i
 
 ## How it works
 
-```mermaid
-flowchart LR
-    S[Scenario<br/>task, policy, canary secret] --> C[Attack payload<br/>hand-written or AgentDojo]
-    C --> A[Agent under test<br/>AgentRed's loop + design controls<br/>or any black-box agent]
-    A <-->|MCP over stdio| B[Recording boundary<br/>proxy or recording server]
-    B <--> T[Tools<br/>scenario tools or a third-party server]
-    B --> TR[(Trace<br/>every call, blocked attempts)]
-    TR --> J[Invariant checks<br/>deterministic]
-    TR --> U[Task-completion check]
-    J --> R[Report<br/>rates, 95% CIs, Fisher tests, HTML]
-    U --> R
-```
+<p align="center"><img src="docs/architecture.svg" width="900" alt="AgentRed architecture: inputs (scenario + attack sets) feed an agent under test (AgentRed loop with design controls, or a black-box agent); every tool call is recorded at the MCP boundary into a trace; deterministic invariant checks, a task-completion check and a calibrated LLM judge produce verdicts; outputs are JSON/HTML/SARIF reports and a CI regression gate."></p>
 
 Each scenario puts an agent in a small environment with a legitimate task, a policy, a fake secret (a uniquely tagged canary), and an attack hidden in one input channel:
 
