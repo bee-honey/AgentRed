@@ -38,7 +38,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .adapters import InProcessToolProvider, MCPToolProvider, ToolProvider
-from .adaptive import ModelAttacker, run_adaptive
+from .adaptive import ModelAttacker, build_attacker, run_adaptive
 from .agent import AgentRun, TargetAgent
 from .attacks import builtin_corpora, load_attacks, scenario_variants
 from .designs import DESIGNS, AgentDesign
@@ -191,10 +191,7 @@ def run_trials(
     for _ in range(trials):
         model = build_model(spec, scenario)  # fresh model each trial (scripted replays reset)
         provider = make_provider(transport, scenario)  # fresh provider/trace (+ MCP subprocess)
-        attacker = (
-            ModelAttacker(build_model(attacker_spec, scenario), scenario)
-            if attacker_spec else None
-        )
+        attacker = build_attacker(attacker_spec, scenario) if attacker_spec else None
         try:
             run, verdict = evaluate(scenario, model, provider, design, attacker)
         finally:

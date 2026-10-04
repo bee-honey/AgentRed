@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from .adapters import ToolProvider
-from .judge import _amount
+from .judge import _amount, is_internal_url
 from .scenario import Scenario
 from .tools import TOOL_REGISTRY
 from .trace import Trace
@@ -155,6 +155,14 @@ class PolicyGuardProvider(_Wrapper):
             amount = _amount(args.get(ctx.get("amount_arg", "amount")))
             if (amount is None or amount > ctx.get("threshold", 0)) and key not in self.approved:
                 return f"{name} for {key!r} requires a granted approval; none on record"
+        # SSRF guard: fetch tools may only reach public, non-internal hosts.
+        if name in ctx.get("fetch_tools", ()):
+            url = str(args.get(ctx.get("url_arg", "url"), ""))
+            allowed = ctx.get("allowed_hosts", ())
+            from urllib.parse import urlparse  # noqa: PLC0415
+            host = (urlparse(url).hostname or "").lower()
+            if not (allowed and host in allowed) and is_internal_url(url):
+                return f"fetch of internal/metadata URL {url!r} denied"
         # Data loss prevention: registered secrets never leave in tool arguments.
         canary = ctx.get("canary")
         if canary and canary in str(args):
